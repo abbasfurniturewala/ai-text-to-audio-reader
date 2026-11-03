@@ -1,5 +1,5 @@
 import type { Segment } from './types';
-import { endsSentence } from './paragraphs';
+import { endsSentence, isHeading } from './paragraphs';
 
 export interface SpeechPart { segment: number; start: number; end: number; offset: number }
 export interface SpeechChunk extends Segment { parts: SpeechPart[] }
@@ -9,8 +9,9 @@ export function sentenceRanges(text: string): { start: number; end: number }[] {
   const result: { start: number; end: number }[] = [];
   for (const sentence of new Intl.Segmenter('en', { granularity: 'sentence' }).segment(text)) {
     const previous = result.at(-1);
-    // ICU can treat titles/initials before a capitalized name as a sentence.
-    if (previous && /\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|e\.g|i\.e|[A-Z])\.$/i.test(text.slice(previous.start, previous.end).trim())) previous.end = sentence.index + sentence.segment.trimEnd().length;
+    const prevText = previous ? text.slice(previous.start, previous.end).trim() : '';
+    // ICU can treat titles/initials or leading item numbers before a capitalized word as a sentence.
+    if (previous && (/\b(?:Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|vs|e\.g|i\.e|[A-Z])\.$/i.test(prevText) || /^\d+(?:\.\d+)*\.$/.test(prevText))) previous.end = sentence.index + sentence.segment.trimEnd().length;
     else result.push({ start: sentence.index, end: sentence.index + sentence.segment.trimEnd().length });
   }
   return result;
@@ -20,6 +21,8 @@ export function sentenceRanges(text: string): { start: number; end: number }[] {
  * inputs need a transport bound; the worker checks the model's actual tokens. */
 export function speechPlan(segments: Segment[], from = 0, character = 0, maxChunks = Infinity): SpeechChunk[] {
   const chunks: SpeechChunk[] = [];
+  const nextContinues = (cur: Segment, next?: Segment) => Boolean(next && !cur.heading && !next.heading &&
+    (/^[a-z]/.test(next.text.trim()) || (next.page !== cur.page && !isHeading(cur.text) && !isHeading(next.text))));
   for (let index = from; index < segments.length; index++) {
     const segment = segments[index];
     const sourceStart = index === from ? wordStart(segment.text, character) : 0;
@@ -27,7 +30,7 @@ export function speechPlan(segments: Segment[], from = 0, character = 0, maxChun
     if (!combined.trim()) continue;
     const sources: SpeechPart[] = [{ segment: index, start: sourceStart, end: segment.text.length, offset: 0 }];
     // A PDF page turn (or an older extraction block) must not end a sentence.
-    while (!endsSentence(combined) && !segments[index].heading && segments[index + 1] && !segments[index + 1].heading && combined.length < 16000) {
+    while (!endsSentence(combined) && nextContinues(segments[index], segments[index + 1]) && combined.length < 16000) {
       const next = segments[++index];
       sources.push({ segment: index, start: 0, end: next.text.length, offset: combined.length + 1 });
       combined += ' ' + next.text;

@@ -1,5 +1,6 @@
 import processorUrl from '@soundtouchjs/audio-worklet/processor?url';
 import { synthesize, speechBuffer } from './audio';
+import { isHeading } from './paragraphs';
 import type { Segment, SpeechRequest } from './types';
 
 export type PlaybackState = 'idle' | 'loading' | 'playing' | 'paused';
@@ -39,7 +40,7 @@ async function createOutput(context: AudioContext, speed: number): Promise<Outpu
 
 // Trim only long, near-silent edge padding. Keep breathing room, quiet speech
 // and internal sentence pauses. This avoids stacking two clips' dead padding.
-export function speechBounds(samples: Float32Array, rate: number): { offset: number; duration: number } {
+export function speechBounds(samples: Float32Array, rate: number, lead = .06, tail = .12): { offset: number; duration: number } {
   const block = Math.max(1, Math.round(rate * .01));
   const audible = (start: number) => {
     let power = 0;
@@ -51,8 +52,8 @@ export function speechBounds(samples: Float32Array, rate: number): { offset: num
   while (first < last && !audible(first)) first += block;
   if (first >= last) return { offset: 0, duration: samples.length / rate };
   while (last > first && !audible(Math.max(first, last - block))) last -= block;
-  const start = first > rate * .18 ? Math.max(0, first - Math.round(rate * .06)) : 0;
-  const end = samples.length - last > rate * .22 ? Math.min(samples.length, last + Math.round(rate * .12)) : samples.length;
+  const start = first > rate * Math.max(.18, lead) ? Math.max(0, first - Math.round(rate * lead)) : 0;
+  const end = samples.length - last > rate * Math.max(.22, tail) ? Math.min(samples.length, last + Math.round(rate * tail)) : samples.length;
   return { offset: start / rate, duration: (end - start) / rate };
 }
 
@@ -177,7 +178,13 @@ export class BufferedNarrator {
           synthesize(request, { signal: this.abort.signal, priority: this.scheduled.length ? 'ahead' : 'interactive' }).then(speech => speechBuffer(speech, context)));
         if (token !== this.generation) return;
         if (!buffer.length) throw new Error('The voice engine returned empty audio. Try this passage again.');
-        const bounds = speechBounds(buffer.getChannelData(0), buffer.sampleRate);
+        const seg = this.options.segments[index], next = this.options.segments[index + 1];
+        const lastSeg = (seg as { parts?: { segment: number }[] }).parts?.at(-1)?.segment;
+        const nextSeg = (next as { parts?: { segment: number }[] } | undefined)?.parts?.[0]?.segment;
+        const headingClip = Boolean(seg.heading || (!/\n/.test(seg.text) && isHeading(seg.text)));
+        const paragraphEnd = !next || (lastSeg !== undefined && nextSeg !== undefined && lastSeg !== nextSeg);
+        const realSpeech = buffer.sampleRate >= 8000;
+        const bounds = speechBounds(buffer.getChannelData(0), buffer.sampleRate, realSpeech ? .10 : .06, realSpeech ? (headingClip ? .64 : paragraphEnd ? .54 : .42) : .12);
         this.prepared.set(index, { buffer, ...bounds });
         this.nextPrepare++;
         this.scheduleReady();

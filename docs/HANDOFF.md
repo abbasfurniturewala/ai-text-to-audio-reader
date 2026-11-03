@@ -5,11 +5,11 @@ Shared memory between Antigravity and Codex. Read this before every task and upd
 ## Current state (as of 2026-11-03)
 
 **Works**
-- Packaged app `release/win-unpacked/Cadence.exe` (v1.0.12) has been updated with all latest changes (UI updates + PDF subheading separation + unpunctuated heading narration pause) and launched. Previous packaged builds retained at `release/previous-build-20261103-190731` and `release/previous-build-20261103-234829`. Live library: `%APPDATA%\Cadence`.
+- Packaged app `release/win-unpacked/Cadence.exe` (v1.0.12) has been updated with all latest changes (UI updates + PDF subheading separation + numbered-heading run-on fix + natural narration pause pacing) and launched. Previous packaged builds retained at `release/previous-build-20261103-190731`, `release/previous-build-20261103-234829`, and `release/previous-build-20261104-004841`. Live library: `%APPDATA%\Cadence`.
 - `npm.cmd ci` installs cleanly (461 packages) with bundled Node 22.19.0 / npm 10.9.3.
-- `npm.cmd test`: 10 files, **66/66 passing**.
+- `npm.cmd test`: 10 files, **67/67 passing**.
 - `npm.cmd run build` (tsc -b + vite build): **passes**.
-- PDF subheadings, bullet lists, and standalone page numbers (`src/paragraphs.ts`) are accurately segmented via `dominantFont` tracking, two-way `headingBreak`, `listBreak`, and `startsBlock`; spoken text normalization (`normalizeSpeechText` in `desktop/speech-input.mjs`) converts newlines to `. `, de-hyphenates line-wrapped words, normalizes arrows (`→`), `₹`/`€` currencies, en-dashes (`–`), leading bullet glyphs, and appends terminal punctuation to standalone headings/bullets before Kokoro synthesis.
+- PDF subheadings (including numbered headings like `"2. Check the money on three real orders"`), bullet lists, and standalone page numbers (`src/paragraphs.ts`, `src/library.ts`, `src/speechPlan.ts`) are accurately segmented and never merged with the following body paragraph as a run-on sentence; natural narration pacing (`src/narration.ts`, `desktop/speech-input.mjs`) preserves distinct breathing pauses at commas/clauses, end of sentences (~520ms), end of paragraphs (~640ms), and headers/sub-headers (~740ms).
 - `node scripts/desktop-qa.mjs` & `node scripts/desktop-qa.mjs --packaged`: **17/17 passing** (verified centered player controls, speed control in player bar, and removal of ElevenLabs UI/IPC).
 - ElevenLabs integration completely removed from UI (`src/App.tsx`), types (`src/types.ts`), preload (`desktop/preload.cjs`), and main process (`desktop/main.cjs`); app uses local neural voices exclusively.
 - Bottom player controls (`.playback-controls`) are centered across all window/panel modes via a symmetric 3-column grid on `.player-top`, with the narration speed slider + readout (`.player-speed`) placed directly beside the player controls instead of in the narrator sidebar.
@@ -33,6 +33,17 @@ Shared memory between Antigravity and Codex. Read this before every task and upd
 2. Decide with the user whether to review `npm audit` findings (would change the lockfile).
 
 ## Session log
+
+### 2026-11-04 – Antigravity (Numbered heading run-on fix & natural narration pause pacing)
+- **Changes:**
+  - Fixed numbered heading classification in `src/paragraphs.ts` (`isHeading`): stripped leading numbering/bullet/section prefixes (`"2. "`, `"1.2 "`, `"Chapter 1: "`) before checking for internal sentence breaks (`/[.!?]\s+\S/`) so numbered headings like `"2. Check the money on three real orders"` are recognized as `heading: true` instead of failing on `"2. C"`.
+  - Updated `src/library.ts` (`loadDocumentText`, `openDocumentText`) to refresh `heading` flags on already-imported documents in IndexedDB (`%APPDATA%\Cadence`) so existing books immediately benefit without re-importing.
+  - Hardened `src/speechPlan.ts` (`sentenceRanges`, `speechPlan`) so unpunctuated blocks on the same page are never concatenated into a run-on sentence (`"orders For three recent..."`) unless the next block starts with a lowercase continuation or crosses a page boundary.
+  - Restored natural sentence, paragraph, and heading pauses in `src/narration.ts` (`speechBounds`, `BufferedNarrator.fill`): stopped trimming real speech clips down to 180ms total gap (60ms lead + 120ms tail), keeping ~520ms at sentence ends, ~640ms at paragraph ends, and ~740ms after headings/sub-headings while keeping 2-argument `speechBounds` unit test behavior intact.
+  - Added `paceAudio` in `desktop/speech-input.mjs` to expand merged `\n\n` heading break valleys to ~580ms, gently pad internal punctuation pause valleys (+90ms up to 460ms), and guarantee >=680ms of trailing silence at the end of generated utterances.
+  - Added regression tests in `tests/paragraphs.test.ts` and `tests/speechPlan.test.ts`.
+- **Checks:** `npm.cmd test` (67/67 pass), `npm.cmd run build` (passes), packaged app updated.
+- **Open issues:** None.
 
 ### 2026-11-04 – Antigravity (PDF extraction & Kokoro spoken text normalization)
 - **Changes:**

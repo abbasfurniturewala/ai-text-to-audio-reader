@@ -1,6 +1,6 @@
 import { createStore, get, promisifyRequest } from 'idb-keyval';
 import type { LibraryItem, ReaderDocument, Segment } from './types';
-import { repairLegacyParagraphs, TEXT_VERSION } from './paragraphs';
+import { isHeading, repairLegacyParagraphs, TEXT_VERSION } from './paragraphs';
 
 const store = createStore('keyval-store', 'keyval');
 const indexKey = 'cadence-library-index-v2';
@@ -81,10 +81,15 @@ export async function deleteDocument(id: string) {
   });
 }
 
+const refreshHeadings = (segments: Segment[]) => segments.map((segment, index) => ({
+  ...segment,
+  heading: Boolean(segment.heading || (isHeading(segment.text) && !/^[a-z]/.test(segments[index + 1]?.text.trim() || ''))),
+}));
+
 export async function loadDocumentText(id: string) {
   const segments = await get<Segment[]>(textKey(id), store);
   if (!segments) throw new Error('This document could not be opened. Try importing the original file again.');
-  return segments;
+  return refreshHeadings(segments);
 }
 
 /** Text, saved position and bookmarks change in the same transaction. No PDF
@@ -102,7 +107,10 @@ export async function openDocumentText(id: string): Promise<{ segments: Segment[
       text.onsuccess = () => {
         try {
           if (!text.result) throw new Error('This document has no saved text.');
-          if ((item.textVersion || 0) >= TEXT_VERSION) { result = { segments: text.result, item }; return; }
+          if ((item.textVersion || 0) >= TEXT_VERSION) {
+            result = { segments: refreshHeadings(text.result as Segment[]), item };
+            return;
+          }
           const { segments, indexMap } = repairLegacyParagraphs(text.result);
           const repaired = libraryItem({ ...item, segments, textVersion: TEXT_VERSION,
             position: indexMap[item.position] ?? 0,

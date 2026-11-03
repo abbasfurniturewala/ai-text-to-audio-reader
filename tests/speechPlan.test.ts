@@ -55,6 +55,18 @@ describe('sentence planning', () => {
     expect(chunkPosition(plan[0], 0, segments).index).toBe(0);
     expect(chunkPosition(plan[0], 1, segments).index).toBe(1);
   });
+  it('never concatenates numbered headings with the following paragraph as a run-on sentence', () => {
+    const segments = [
+      { text: '2. Check the money on three real orders', page: 2, heading: false },
+      { text: 'For three recent completed orders, if available, write down the amount collected, product costs, delivery, installation, discounts and other order costs. Calculate what you actually kept.', page: 2, heading: false }
+    ];
+    const plan = speechPlan(segments);
+    expect(plan.map(chunk => chunk.text)).toEqual([
+      '2. Check the money on three real orders',
+      'For three recent completed orders, if available, write down the amount collected, product costs, delivery, installation, discounts and other order costs.',
+      'Calculate what you actually kept.'
+    ]);
+  });
   it('handles punctuation, apostrophes, unicode and final words', () => {
     expect(wordStart('Don’t stop café readers.', 3)).toBe(0);
     const segments = [{ text: 'Don’t stop café readers.', page: 1 }];

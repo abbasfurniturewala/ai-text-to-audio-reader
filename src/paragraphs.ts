@@ -4,10 +4,11 @@ export const TEXT_VERSION = 2;
 export const endsSentence = (text: string) => /[.!?…]["'”’\])]*$/.test(text.trim());
 const isListItem = (text: string) => /^(?:[•●◦▪▸▹*-]|\d{1,3}[.)]|[a-zA-Z]\))\s+\S/u.test(text.trim());
 const startsBlock = (text: string) => /^["'“‘(\[$£€₹¥•●◦▪▸▹*-]?\s*[\p{Lu}\d]/u.test(text.trim());
-const isHeading = (text: string) => {
+export const isHeading = (text: string) => {
   const t = text.trim(), words = t.split(/\s+/).length;
+  const body = t.replace(/^(?:(?:chapter|part|section)\s+\S+\s*[:.—–-]?\s*|\d+(?:\.\d+)*[.)]\s+|[a-zA-Z][.)]\s+|[•●◦▪▸▹*-]\s+)/iu, '');
   return t.length > 0 && t.length < 120 && words <= 14 && /\p{L}/u.test(t) &&
-    (!/[.!;:,]["'”’\])]*$/.test(t) || (t.endsWith(':') && words <= 10)) && !/[.!?]\s+\S/.test(t);
+    (!/[.!;:,]["'”’\])]*$/.test(t) || (t.endsWith(':') && words <= 10)) && !/[.!?]\s+\S/.test(body);
 };
 
 /** Display paragraphs are independent of the voice model's input window. */

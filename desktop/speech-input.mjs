@@ -50,9 +50,58 @@ function trimPadding(audio, side) {
   return side === 'start' ? samples.subarray(Math.max(0, at - margin)) : samples.subarray(0, Math.min(samples.length, at + margin + 1));
 }
 
+function paceAudio(audio, rawText) {
+  const rate = audio?.sampling_rate, samples = audio?.audio;
+  if (!rate || rate < 8000 || !samples || samples.length < rate * .25) return audio;
+  const block = Math.max(1, Math.round(rate * .01));
+  const rmsAt = start => {
+    let sum = 0, end = Math.min(samples.length, start + block);
+    for (let i = start; i < end; i++) sum += samples[i] * samples[i];
+    return Math.sqrt(sum / Math.max(1, end - start));
+  };
+  let first = 0, last = samples.length;
+  while (first < last && rmsAt(first) < .004) first += block;
+  if (first >= last) return audio;
+  while (last > first && rmsAt(Math.max(first, last - block)) < .004) last -= block;
+  const hasHeadingBreak = /\n\s*\n/.test(rawText);
+  const hasInternalPunct = hasHeadingBreak || /[,;:—–.!?]\s+\S/.test(rawText.trim());
+  const inserts = [];
+  if (hasInternalPunct) {
+    let run = 0, valleyStart = first, usedHeadingBreak = false;
+    const minBlocks = hasHeadingBreak ? 15 : 20;
+    for (let pos = first; pos < last; pos += block) {
+      if (rmsAt(pos) < .0035) { if (!run) valleyStart = pos; run++; }
+      else {
+        if (run >= minBlocks) {
+          const currentSec = (run * block) / rate;
+          const addSec = hasHeadingBreak && !usedHeadingBreak ? Math.max(0, .58 - currentSec)
+            : (run >= 20 && currentSec < .46 ? Math.min(.09, .46 - currentSec) : 0);
+          if (hasHeadingBreak && !usedHeadingBreak) usedHeadingBreak = true;
+          if (addSec > .01) inserts.push({ at: valleyStart + Math.floor((run * block) / 2), count: Math.round(rate * addSec) });
+        }
+        run = 0;
+      }
+    }
+  }
+  const tailSilence = samples.length - last;
+  const needTail = Math.max(0, Math.round(rate * .68) - tailSilence);
+  if (!inserts.length && !needTail) return audio;
+  const totalExtra = inserts.reduce((sum, item) => sum + item.count, 0) + needTail;
+  const out = new Float32Array(samples.length + totalExtra);
+  let src = 0, dst = 0;
+  for (const item of inserts) {
+    const slice = samples.subarray(src, item.at);
+    out.set(slice, dst);
+    dst += slice.length + item.count;
+    src = item.at;
+  }
+  out.set(samples.subarray(src), dst);
+  return { audio: out, sampling_rate: rate };
+}
+
 export async function generateComplete(tts, text, options, checkCancelled = () => {}) {
   checkCancelled();
-  try { return await tts.generate(normalizeSpeechText(text), options); }
+  try { return paceAudio(await tts.generate(normalizeSpeechText(text), options), text); }
   catch (error) {
     if (error.code !== 'VOICE_CONTEXT' || text.length < 2) throw error;
     const pieces = contextSplit(text);

@@ -48,16 +48,20 @@ describe('logical paragraphs', () => {
       { str: 'high that furniture is a real online category with steady demand.', height: 12, width: 330, fontName: 'Regular', transform: [1, 0, 0, 1, 186, 720] },
       { str: 'How to structure your online to showroom funnel for high-ticket custom orders', height: 12, width: 310, fontName: 'Bold', transform: [1, 0, 0, 1, 72, 700] },
       { str: '“India contains different customer budgets and purchase priorities across tiers.”', height: 12, width: 440, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 682] },
-      { str: '• Capture local intent early', height: 12, width: 180, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 664] },
-      { str: '• Offer design consultation', height: 12, width: 175, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 646] },
-      { str: '• Follow up with samples', height: 12, width: 165, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 628] },
-      { str: '42', height: 10, width: 16, fontName: 'Regular', transform: [1, 0, 0, 1, 300, 560] }
+      { str: '2. Check the money on three real orders', height: 12, width: 210, fontName: 'Bold', transform: [1, 0, 0, 1, 72, 668] },
+      { str: 'For three recent completed orders, if available, write down the amount collected.', height: 12, width: 440, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 650] },
+      { str: '• Capture local intent early', height: 12, width: 180, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 632] },
+      { str: '• Offer design consultation', height: 12, width: 175, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 614] },
+      { str: '• Follow up with samples', height: 12, width: 165, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 596] },
+      { str: '42', height: 10, width: 16, fontName: 'Regular', transform: [1, 0, 0, 1, 300, 540] }
     ];
     const result = pdfParagraphs(items, 3);
     expect(result.map(item => [item.text, item.heading])).toEqual([
       ['Evidence confidence: high that furniture is a real online category with steady demand.', false],
       ['How to structure your online to showroom funnel for high-ticket custom orders', true],
       ['“India contains different customer budgets and purchase priorities across tiers.”', false],
+      ['2. Check the money on three real orders', true],
+      ['For three recent completed orders, if available, write down the amount collected.', false],
       ['• Capture local intent early', true],
       ['• Offer design consultation', true],
       ['• Follow up with samples', true],
