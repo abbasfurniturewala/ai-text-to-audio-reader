@@ -1,0 +1,79 @@
+{
+  "name": "cadence-reader",
+  "version": "1.0.12",
+  "description": "A local-first document reader with natural neural narration.",
+  "private": true,
+  "author": "Cadence Reader",
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "desktop": "node scripts/start-desktop.mjs",
+    "build": "tsc -b && vite build",
+    "start": "electron .",
+    "test": "vitest run",
+    "test:integration": "node scripts/desktop-qa.mjs",
+    "package": "npm run build && electron-builder --dir --win --x64",
+    "package:portable": "npm run build && electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^3.8.1",
+    "@soundtouchjs/audio-worklet": "^2.1.1",
+    "idb-keyval": "^6.2.2",
+    "kokoro-js": "^1.2.1",
+    "lucide-react": "^0.468.0",
+    "mammoth": "^1.11.0",
+    "pdfjs-dist": "^5.4.149",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.5.0",
+    "@types/react": "^19.1.13",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.3",
+    "electron": "^38.1.2",
+    "electron-builder": "^26.0.12",
+    "playwright": "^1.64.1",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.6",
+    "vitest": "^3.2.4"
+  },
+  "build": {
+    "appId": "local.cadence.reader",
+    "productName": "Cadence",
+    "copyright": "Cadence Reader",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "desktop/**/*",
+      "package.json",
+      "!node_modules/onnxruntime-node/bin/napi-v3/darwin/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v3/linux/**/*",
+      "!node_modules/onnxruntime-node/bin/napi-v3/win32/arm64/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": ".cache/models",
+        "to": "models",
+        "filter": ["**/*", "!**/model_quantized.onnx"]
+      }
+    ],
+    "asarUnpack": [
+      "node_modules/onnxruntime-node/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*"
+    ],
+    "compression": "normal",
+    "win": {
+      "target": "portable",
+      "icon": "build/icon.ico",
+      "signExecutable": false
+    },
+    "portable": {
+      "artifactName": "Cadence-Reader-${version}-Windows.exe"
+    }
+  }
+}

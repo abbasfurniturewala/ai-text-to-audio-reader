@@ -1,0 +1,37 @@
+{
+  "preparedFor": "Windows x64 Intel/AMD",
+  "snapshotDate": "2026-11-01",
+  "appVersion": "1.0.12",
+  "includedRuntime": { "node": "22.19.0", "npm": "10.9.3" },
+  "savedDocuments": 2,
+  "originalPdfFiles": 1,
+  "libraryRoundTrip": {
+    "textAndIdsPreserved": true,
+    "pdfSha256Preserved": true,
+    "bookmarksPreserved": true,
+    "audioPositionsPreserved": true,
+    "browsingCheckpointPreserved": true,
+    "repeatImportIdempotent": true,
+    "newerDestinationStatePreserved": true,
+    "credentialsIncluded": false
+  },
+  "copiedFolderRestore": {
+    "windowsPowerShellSetupPassed": true,
+    "usedIncludedNodeRuntime": true,
+    "isolatedDestinationProfile": true,
+    "lastBookAndPageRestored": true,
+    "nativeOfflineSpeechSamples": 92400,
+    "nativeOfflineSpeechSampleRate": 24000,
+    "fp32ModelBytes": 325532232
+  },
+  "sourceRebuildFromRestoredFolder": {
+    "lockedDependencyInstallPassed": true,
+    "usedIncludedNodeAndNpm": true,
+    "dependencyInstallUsedSourcePcCache": true,
+    "freshPcDependencyInstallRequiresInternet": true,
+    "unitTestsPassed": 63,
+    "typescriptAndViteBuildPassed": true,
+    "syntheticNavigationChecksPassed": 11,
+    "oldSourcePcBookPathRequired": false
+  }
+}

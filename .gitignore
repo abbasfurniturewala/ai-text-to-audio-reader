@@ -1,0 +1,13 @@
+node_modules/
+dist/
+release/
+test-results/
+.cache/
+*.log
+*.tsbuildinfo
+.env*
+!.env.example
+tools/node/
+migration/library/
+migration/RESTORE_REPORT.json
+MIGRATION_BUNDLE.json

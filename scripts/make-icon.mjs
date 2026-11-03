@@ -1,0 +1,12 @@
+import sharp from 'sharp';
+import { mkdir, writeFile } from 'node:fs/promises';
+await mkdir('build', { recursive: true });
+const bars = [[65,106,20],[89,85,62],[113,65,102],[137,92,48],[161,76,80],[185,104,24]];
+const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256"><rect x="6" y="6" width="244" height="244" rx="58" fill="#345b47"/>${bars.map(([x,y,h])=>`<rect x="${x}" y="${y}" width="8" height="${h}" rx="4" fill="#f1f4e8"/>`).join('')}</svg>`;
+const png = await sharp(Buffer.from(svg)).png().toBuffer();
+await writeFile('desktop/icon.png', png);
+const header = Buffer.alloc(22);
+header.writeUInt16LE(1, 2); header.writeUInt16LE(1, 4);
+header.writeUInt16LE(1, 10); header.writeUInt16LE(32, 12);
+header.writeUInt32LE(png.length, 14); header.writeUInt32LE(22, 18);
+await writeFile('build/icon.ico', Buffer.concat([header, png]));
