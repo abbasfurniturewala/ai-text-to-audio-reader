@@ -42,6 +42,28 @@ describe('logical paragraphs', () => {
       { text: 'India contains different customer budgets and purchase priorities. Each tier responds to a clear value proposition and transparent delivery.', page: 2, heading: false }
     ]);
   });
+  it('separates subheadings after mixed-font paragraphs, longer headings, quotes, bullet lists, and page numbers', () => {
+    const items = [
+      { str: 'Evidence confidence:', height: 12, width: 110, fontName: 'Bold', transform: [1, 0, 0, 1, 72, 720] },
+      { str: 'high that furniture is a real online category with steady demand.', height: 12, width: 330, fontName: 'Regular', transform: [1, 0, 0, 1, 186, 720] },
+      { str: 'How to structure your online to showroom funnel for high-ticket custom orders', height: 12, width: 310, fontName: 'Bold', transform: [1, 0, 0, 1, 72, 700] },
+      { str: '“India contains different customer budgets and purchase priorities across tiers.”', height: 12, width: 440, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 682] },
+      { str: '• Capture local intent early', height: 12, width: 180, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 664] },
+      { str: '• Offer design consultation', height: 12, width: 175, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 646] },
+      { str: '• Follow up with samples', height: 12, width: 165, fontName: 'Regular', transform: [1, 0, 0, 1, 72, 628] },
+      { str: '42', height: 10, width: 16, fontName: 'Regular', transform: [1, 0, 0, 1, 300, 560] }
+    ];
+    const result = pdfParagraphs(items, 3);
+    expect(result.map(item => [item.text, item.heading])).toEqual([
+      ['Evidence confidence: high that furniture is a real online category with steady demand.', false],
+      ['How to structure your online to showroom funnel for high-ticket custom orders', true],
+      ['“India contains different customer budgets and purchase priorities across tiers.”', false],
+      ['• Capture local intent early', true],
+      ['• Offer design consultation', true],
+      ['• Follow up with samples', true],
+      ['42', false]
+    ]);
+  });
   it('repairs old broken blocks and maps saved markers without crossing pages or headings', () => {
     const old = [{ text: 'Chapter One', page: 1, heading: true },
       { text: 'A sufficiently long sentence that the old importer split in the', page: 1 },

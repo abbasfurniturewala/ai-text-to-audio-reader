@@ -7,9 +7,9 @@ Shared memory between Antigravity and Codex. Read this before every task and upd
 **Works**
 - Packaged app `release/win-unpacked/Cadence.exe` (v1.0.12) has been updated with all latest changes (UI updates + PDF subheading separation + unpunctuated heading narration pause) and launched. Previous packaged builds retained at `release/previous-build-20261103-190731` and `release/previous-build-20261103-234829`. Live library: `%APPDATA%\Cadence`.
 - `npm.cmd ci` installs cleanly (461 packages) with bundled Node 22.19.0 / npm 10.9.3.
-- `npm.cmd test`: 10 files, **65/65 passing**.
+- `npm.cmd test`: 10 files, **66/66 passing**.
 - `npm.cmd run build` (tsc -b + vite build): **passes**.
-- PDF subheadings (`src/paragraphs.ts`) are now separated from the body paragraphs they introduce via font-change/height (`fontBreak` at 12% or uniform font change) and standalone short-line `headingBreak`, and unpunctuated heading breaks (`\n\n`) in `desktop/speech-input.mjs` (`generateComplete`) are normalized with terminal punctuation (`.\n\n`) before Kokoro synthesis so headings pause naturally before the following sentence.
+- PDF subheadings, bullet lists, and standalone page numbers (`src/paragraphs.ts`) are accurately segmented via `dominantFont` tracking, two-way `headingBreak`, `listBreak`, and `startsBlock`; spoken text normalization (`normalizeSpeechText` in `desktop/speech-input.mjs`) converts newlines to `. `, de-hyphenates line-wrapped words, normalizes arrows (`→`), `₹`/`€` currencies, en-dashes (`–`), leading bullet glyphs, and appends terminal punctuation to standalone headings/bullets before Kokoro synthesis.
 - `node scripts/desktop-qa.mjs` & `node scripts/desktop-qa.mjs --packaged`: **17/17 passing** (verified centered player controls, speed control in player bar, and removal of ElevenLabs UI/IPC).
 - ElevenLabs integration completely removed from UI (`src/App.tsx`), types (`src/types.ts`), preload (`desktop/preload.cjs`), and main process (`desktop/main.cjs`); app uses local neural voices exclusively.
 - Bottom player controls (`.playback-controls`) are centered across all window/panel modes via a symmetric 3-column grid on `.player-top`, with the narration speed slider + readout (`.player-speed`) placed directly beside the player controls instead of in the narrator sidebar.
@@ -33,6 +33,15 @@ Shared memory between Antigravity and Codex. Read this before every task and upd
 2. Decide with the user whether to review `npm audit` findings (would change the lockfile).
 
 ## Session log
+
+### 2026-11-04 – Antigravity (PDF extraction & Kokoro spoken text normalization)
+- **Changes:**
+  - Updated `src/paragraphs.ts` (`isHeading`, `isListItem`, `startsBlock`, `pdfParagraphs`): required Unicode letters (`\p{L}`) in `isHeading` (preventing standalone page numbers from being marked as headings), allowed up to 14 words (`< 120` chars) and trailing `?`/`:`, tracked `dominantFont` per line so bold subheadings after mixed-font paragraphs still trigger `fontBreak`, added `listBreak` for bulleted/numbered lists, and made `headingBreak` work both before and after standalone headings.
+  - Updated `src/speechPlan.ts` and `desktop/speech-input.mjs` (`contextSplit`) to split oversized clauses on en-dashes (`–`) as well as em-dashes (`—`).
+  - Added and exported `normalizeSpeechText` in `desktop/speech-input.mjs` (invoked in `generateComplete` right before `tts.generate`) to convert newlines to `. ` (since Kokoro's tokenizer strips `\n`), de-hyphenate line-wrapped words (`specifi- cation`), replace flow arrows (`→`) with `, `, expand `₹` and `€` currencies, normalize digit-range and parenthetical en-dashes (`–`), strip leading bullet glyphs, and append `.` to unpunctuated standalone headings/bullets.
+  - Added unit tests in `tests/paragraphs.test.ts` and `tests/speech-input.test.js`.
+- **Checks:** `npm.cmd test` (66/66 pass), `npm.cmd run build` (passes), `node scripts/package-update.mjs` + `scripts/apply-desktop-update.ps1` (applied and launched `release/win-unpacked/Cadence.exe`).
+- **Open issues:** Note that existing PDFs already imported into IndexedDB cache their extracted segments in `cadence-text:<id>` (`TEXT_VERSION = 2`), so re-import an already-saved PDF if you want its subheadings/bullets re-extracted with the new `pdfParagraphs` rules.
 
 ### 2026-11-03 – Antigravity (PDF subheading breaks & heading narration pause)
 - **Changes:**

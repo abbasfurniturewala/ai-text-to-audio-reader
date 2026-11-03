@@ -16,12 +16,29 @@ export function guardTokenWindow(tts) {
 
 export function contextSplit(text) {
   const middle = text.length / 2;
-  const clauses = [...text.matchAll(/[,;:—]\s+/g)].map(match => match.index + 1)
+  const clauses = [...text.matchAll(/[,;:—–]\s+/g)].map(match => match.index + 1)
     .filter(index => index >= text.length * .2 && index <= text.length * .8);
   const words = [...text.matchAll(/\s+/g)].map(match => match.index);
   const choices = clauses.length ? clauses : words;
   const at = choices.sort((a, b) => Math.abs(a - middle) - Math.abs(b - middle))[0] || Math.floor(middle);
   return [text.slice(0, at).trim(), text.slice(at).trim()].filter(Boolean);
+}
+
+export function normalizeSpeechText(text) {
+  const normalized = text
+    .replace(/(?<![.!?:;…—–\-\s])[ \t]*\n+\s*/g, '. ')
+    .replace(/\s*\n+\s*/g, ' ')
+    .replace(/(?<=\b[a-zA-Z]{2,})-\s+(?=[a-z]{2,}\b)/g, '')
+    .replace(/\s*(?:→|->|=>|⟶|⇒)\s*/g, ', ')
+    .replace(/₹\s*(\d+(?:,\d+)*(?:\.\d+)?(?:\s*(?:lakh|lakhs|crore|crores|thousand|million|billion))?)\b/gi, '$1 rupees')
+    .replace(/\b1 rupees\b/gi, '1 rupee')
+    .replace(/€\s*(\d+(?:,\d+)*(?:\.\d+)?(?:\s*(?:thousand|million|billion))?)\b/gi, '$1 euros')
+    .replace(/\b1 euros\b/gi, '1 euro')
+    .replace(/(?<=\d)\s*–\s*(?=\d)/g, ' to ')
+    .replace(/\s+–\s+/g, ' — ')
+    .replace(/^[\s•●◦▪▸▹]+/u, '')
+    .trim();
+  return normalized && !/[.!?…,:;—–"'”’\])]$/u.test(normalized) ? normalized + '.' : normalized;
 }
 
 function trimPadding(audio, side) {
@@ -35,8 +52,7 @@ function trimPadding(audio, side) {
 
 export async function generateComplete(tts, text, options, checkCancelled = () => {}) {
   checkCancelled();
-  const input = text.replace(/(?<![.!?:;…—–-])\n\n+/g, '.\n\n');
-  try { return await tts.generate(input, options); }
+  try { return await tts.generate(normalizeSpeechText(text), options); }
   catch (error) {
     if (error.code !== 'VOICE_CONTEXT' || text.length < 2) throw error;
     const pieces = contextSplit(text);

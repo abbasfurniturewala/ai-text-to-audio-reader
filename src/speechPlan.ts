@@ -41,7 +41,7 @@ export function speechPlan(segments: Segment[], from = 0, character = 0, maxChun
         let end = range.end;
         if (end - start > 1600) {
           const prefix = combined.slice(start, start + 1600);
-          const clause = [...prefix.matchAll(/[,;:—]\s+/g)].filter(match => match.index > 300).at(-1);
+          const clause = [...prefix.matchAll(/[,;:—–]\s+/g)].filter(match => match.index > 300).at(-1);
           end = start + (clause ? clause.index + 1 : prefix.lastIndexOf(' ') > 0 ? prefix.lastIndexOf(' ') : 1600);
         }
         const text = combined.slice(start, end).trimEnd();

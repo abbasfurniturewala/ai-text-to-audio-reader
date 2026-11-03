@@ -2,7 +2,13 @@ import type { Segment } from './types';
 
 export const TEXT_VERSION = 2;
 export const endsSentence = (text: string) => /[.!?…]["'”’\])]*$/.test(text.trim());
-const isHeading = (text: string) => text.length < 95 && text.split(/\s+/).length <= 10 && !/[.!?;:,]$/.test(text);
+const isListItem = (text: string) => /^(?:[•●◦▪▸▹*-]|\d{1,3}[.)]|[a-zA-Z]\))\s+\S/u.test(text.trim());
+const startsBlock = (text: string) => /^["'“‘(\[$£€₹¥•●◦▪▸▹*-]?\s*[\p{Lu}\d]/u.test(text.trim());
+const isHeading = (text: string) => {
+  const t = text.trim(), words = t.split(/\s+/).length;
+  return t.length > 0 && t.length < 120 && words <= 14 && /\p{L}/u.test(t) &&
+    (!/[.!;:,]["'”’\])]*$/.test(t) || (t.endsWith(':') && words <= 10)) && !/[.!?]\s+\S/.test(t);
+};
 
 /** Display paragraphs are independent of the voice model's input window. */
 export function splitText(text: string, page = 1): Segment[] {
@@ -12,7 +18,7 @@ export function splitText(text: string, page = 1): Segment[] {
 }
 
 interface PdfTextItem { str: string; transform: number[]; width: number; height: number; fontName?: string; hasEOL?: boolean }
-interface Line { text: string; x: number; right: number; y: number; height: number; font?: string }
+interface Line { text: string; x: number; right: number; y: number; height: number; font?: string; dominantFont?: string; fonts: Map<string, number> }
 
 /** Use the page's actual baseline pitch. Font height * 1.6 used to place
  * identical 24pt lines on opposite sides of a floating-point threshold. */
@@ -20,14 +26,23 @@ export function pdfParagraphs(items: PdfTextItem[], page: number): Segment[] {
   const lines: Line[] = [];
   for (const item of items) {
     if (!item.str.trim()) continue;
-    const x = item.transform[4], y = item.transform[5], height = Math.abs(item.height) || 12;
+    const x = item.transform[4], y = item.transform[5], height = Math.abs(item.height) || 12, weight = item.str.trim().length;
     const previous = lines.at(-1);
     if (previous && Math.abs(y - previous.y) <= Math.max(2, height * .2) && x >= previous.x - 2) {
       previous.text += ' ' + item.str;
       previous.right = Math.max(previous.right, x + item.width);
       previous.height = Math.max(previous.height, height);
       previous.font = previous.font === item.fontName ? previous.font : undefined;
-    } else lines.push({ text: item.str, x, right: x + item.width, y, height, font: item.fontName });
+      if (item.fontName) {
+        const nextWeight = (previous.fonts.get(item.fontName) || 0) + weight;
+        previous.fonts.set(item.fontName, nextWeight);
+        if (!previous.dominantFont || nextWeight > (previous.fonts.get(previous.dominantFont) || 0)) previous.dominantFont = item.fontName;
+      }
+    } else {
+      const fonts = new Map<string, number>();
+      if (item.fontName) fonts.set(item.fontName, weight);
+      lines.push({ text: item.str, x, right: x + item.width, y, height, font: item.fontName, dominantFont: item.fontName, fonts });
+    }
   }
   if (!lines.length) return [];
   const pitches = lines.slice(1).map((line, index) => lines[index].y - line.y)
@@ -41,14 +56,19 @@ export function pdfParagraphs(items: PdfTextItem[], page: number): Segment[] {
     const gap = previous ? previous.y - line.y : 0;
     const spacingBreak = previous && gap > (pitch ? pitch * 1.4 : previous.height * 2.2) + 1;
     const columnBreak = previous && (gap < -2 || line.x > previous.right + line.height);
-    const fontChange = !!previous?.font && !!line.font && previous.font !== line.font;
+    const afterHeadingFont = !!previous?.font && !!line.dominantFont && previous.font !== line.dominantFont;
+    const beforeHeadingFont = !!previous?.dominantFont && !!line.font && previous.dominantFont !== line.font;
     const fontBreak = previous && (Math.abs(line.height - previous.height) > Math.min(line.height, previous.height) * .12 ||
-      (fontChange && ((singleLine && isHeading(previous.text.trim()) && /^[A-Z]/.test(line.text.trim())) || (endsSentence(previous.text) && isHeading(line.text.trim())))));
-    const headingBreak = previous && singleLine && previous.right < right - previous.height * 3 &&
-      isHeading(previous.text.trim()) && !/[.!?]\s/.test(previous.text) && /^[A-Z]/.test(line.text.trim());
+      (afterHeadingFont && singleLine && isHeading(previous.text) && startsBlock(line.text)) ||
+      (beforeHeadingFont && endsSentence(previous.text) && isHeading(line.text) && startsBlock(line.text)));
+    const listBreak = previous && (isListItem(line.text) ||
+      (isListItem(previous.text) && previous.right < right - previous.height * 3 && startsBlock(line.text)));
+    const headingBreak = previous && (
+      (singleLine && previous.right < right - previous.height * 3 && isHeading(previous.text) && startsBlock(line.text)) ||
+      (endsSentence(previous.text) && line.right < right - line.height * 3 && isHeading(line.text) && startsBlock(line.text) && (!lines[index + 1] || startsBlock(lines[index + 1].text))));
     const paragraphEnd = previous && endsSentence(previous.text) &&
       (previous.right < right - previous.height * 3 || line.x > previous.x + line.height * .7);
-    if (!previous || spacingBreak || columnBreak || fontBreak || headingBreak || paragraphEnd) {
+    if (!previous || spacingBreak || columnBreak || fontBreak || listBreak || headingBreak || paragraphEnd) {
       paragraphs.push(line.text);
       singleLine = true;
     } else {

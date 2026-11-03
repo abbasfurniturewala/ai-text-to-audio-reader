@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { guardTokenWindow, generateComplete } from '../desktop/speech-input.mjs';
+import { guardTokenWindow, generateComplete, normalizeSpeechText } from '../desktop/speech-input.mjs';
 
 describe('voice context safety', () => {
   it('disables silent truncation before the model runs', () => {
@@ -35,11 +35,13 @@ describe('voice context safety', () => {
     await expect(generateComplete(tts, 'one two three four five six', {}, () => { if (calls >= 2) throw new Error('cancelled'); })).rejects.toThrow('cancelled');
     await expect(generateComplete({ generate: async () => { throw new Error('model failed'); } }, 'Hello.', {})).rejects.toThrow('model failed');
   });
-  it('adds terminal punctuation to unpunctuated heading breaks before synthesis', async () => {
+  it('normalizes heading breaks, arrows, currencies, en-dashes, bullets, and line-wrap hyphens before synthesis', async () => {
     const requests = [];
     const tts = { generate: async text => { requests.push(text); return { audio: new Float32Array(8), sampling_rate: 24000 }; } };
     await generateComplete(tts, 'Chapter one\n\nA small beginning.', {});
     await generateComplete(tts, 'Already punctuated.\n\nNext sentence.', {});
-    expect(requests).toEqual(['Chapter one.\n\nA small beginning.', 'Already punctuated.\n\nNext sentence.']);
+    expect(requests).toEqual(['Chapter one. A small beginning.', 'Already punctuated. Next sentence.']);
+    expect(normalizeSpeechText('• discover online → shortlist → pay ₹1 lakh or €1 in 10–15 days – with specifi- cation'))
+      .toBe('discover online, shortlist, pay 1 lakh rupees or 1 euro in 10 to 15 days — with specification.');
   });
 });
