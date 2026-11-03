@@ -30,6 +30,18 @@ describe('logical paragraphs', () => {
     ];
     expect(pdfParagraphs(items, 1).map(item => item.text)).toEqual(['Chapter One', 'A paragraph begins here and ends on this line.', 'A separate column.']);
   });
+  it('keeps bold or same-height subheadings separate from the paragraph they introduce', () => {
+    const items = [
+      { str: 'What price sensitivity means for your strategy', height: 12, width: 250, fontName: 'F2', transform: [1, 0, 0, 1, 72, 700] },
+      { str: 'India contains different customer budgets and purchase priorities.', height: 12, width: 440, fontName: 'F1', transform: [1, 0, 0, 1, 72, 682] },
+      { str: 'Each tier responds to a clear value proposition and transparent delivery.', height: 12, width: 430, fontName: 'F1', transform: [1, 0, 0, 1, 72, 664] }
+    ];
+    const result = pdfParagraphs(items, 2);
+    expect(result).toEqual([
+      { text: 'What price sensitivity means for your strategy', page: 2, heading: true },
+      { text: 'India contains different customer budgets and purchase priorities. Each tier responds to a clear value proposition and transparent delivery.', page: 2, heading: false }
+    ]);
+  });
   it('repairs old broken blocks and maps saved markers without crossing pages or headings', () => {
     const old = [{ text: 'Chapter One', page: 1, heading: true },
       { text: 'A sufficiently long sentence that the old importer split in the', page: 1 },

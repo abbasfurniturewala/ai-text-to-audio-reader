@@ -11,8 +11,8 @@ export function splitText(text: string, page = 1): Segment[] {
     .map(text => ({ text, page, heading: isHeading(text) }));
 }
 
-interface PdfTextItem { str: string; transform: number[]; width: number; height: number; hasEOL?: boolean }
-interface Line { text: string; x: number; right: number; y: number; height: number }
+interface PdfTextItem { str: string; transform: number[]; width: number; height: number; fontName?: string; hasEOL?: boolean }
+interface Line { text: string; x: number; right: number; y: number; height: number; font?: string }
 
 /** Use the page's actual baseline pitch. Font height * 1.6 used to place
  * identical 24pt lines on opposite sides of a floating-point threshold. */
@@ -26,7 +26,8 @@ export function pdfParagraphs(items: PdfTextItem[], page: number): Segment[] {
       previous.text += ' ' + item.str;
       previous.right = Math.max(previous.right, x + item.width);
       previous.height = Math.max(previous.height, height);
-    } else lines.push({ text: item.str, x, right: x + item.width, y, height });
+      previous.font = previous.font === item.fontName ? previous.font : undefined;
+    } else lines.push({ text: item.str, x, right: x + item.width, y, height, font: item.fontName });
   }
   if (!lines.length) return [];
   const pitches = lines.slice(1).map((line, index) => lines[index].y - line.y)
@@ -34,16 +35,26 @@ export function pdfParagraphs(items: PdfTextItem[], page: number): Segment[] {
   const pitch = pitches.length ? pitches[Math.floor((pitches.length - 1) * .4)] : 0;
   const right = Math.max(...lines.map(line => line.right));
   const paragraphs: string[] = [];
+  let singleLine = false;
   for (let index = 0; index < lines.length; index++) {
     const line = lines[index], previous = lines[index - 1];
     const gap = previous ? previous.y - line.y : 0;
     const spacingBreak = previous && gap > (pitch ? pitch * 1.4 : previous.height * 2.2) + 1;
     const columnBreak = previous && (gap < -2 || line.x > previous.right + line.height);
-    const fontBreak = previous && Math.abs(line.height - previous.height) > Math.min(line.height, previous.height) * .25;
+    const fontChange = !!previous?.font && !!line.font && previous.font !== line.font;
+    const fontBreak = previous && (Math.abs(line.height - previous.height) > Math.min(line.height, previous.height) * .12 ||
+      (fontChange && ((singleLine && isHeading(previous.text.trim()) && /^[A-Z]/.test(line.text.trim())) || (endsSentence(previous.text) && isHeading(line.text.trim())))));
+    const headingBreak = previous && singleLine && previous.right < right - previous.height * 3 &&
+      isHeading(previous.text.trim()) && !/[.!?]\s/.test(previous.text) && /^[A-Z]/.test(line.text.trim());
     const paragraphEnd = previous && endsSentence(previous.text) &&
       (previous.right < right - previous.height * 3 || line.x > previous.x + line.height * .7);
-    if (!previous || spacingBreak || columnBreak || fontBreak || paragraphEnd) paragraphs.push(line.text);
-    else paragraphs[paragraphs.length - 1] += ' ' + line.text;
+    if (!previous || spacingBreak || columnBreak || fontBreak || headingBreak || paragraphEnd) {
+      paragraphs.push(line.text);
+      singleLine = true;
+    } else {
+      paragraphs[paragraphs.length - 1] += ' ' + line.text;
+      singleLine = false;
+    }
   }
   return paragraphs.flatMap(text => splitText(text, page));
 }

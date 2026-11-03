@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { BufferedNarrator, type PlaybackState } from './narration';
 import { synthesize } from './audio';
 import { speechPlan, chunkPosition } from './speechPlan';
-import type { ReaderDocument, Engine } from './types';
+import type { ReaderDocument } from './types';
 
-export function usePlayer(doc: ReaderDocument | undefined, engine: Engine, voice: string, model: string, speed: number,
+export function usePlayer(doc: ReaderDocument | undefined, voice: string, speed: number,
   onPosition: (index: number) => void, onError: (message: string) => void, startupSeconds = 0, prepareEnabled = true) {
   const [state, setState] = useState<PlaybackState>('idle');
   const [fraction, setFraction] = useState(0);
@@ -12,8 +12,8 @@ export function usePlayer(doc: ReaderDocument | undefined, engine: Engine, voice
   const session = useRef<BufferedNarrator | undefined>(undefined);
   const mounted = useRef(true);
   const preparation = useRef<{ abort: AbortController; first: string } | undefined>(undefined);
-  const current = useRef({ doc, engine, voice, model, speed, onPosition, onError, startupSeconds });
-  current.current = { doc, engine, voice, model, speed, onPosition, onError, startupSeconds };
+  const current = useRef({ doc, voice, speed, onPosition, onError, startupSeconds });
+  current.current = { doc, voice, speed, onPosition, onError, startupSeconds };
   const stop = useCallback(() => { session.current?.stop(); session.current = undefined; setState('idle'); setFraction(0); setBufferedSeconds(0); }, []);
 
   const playFrom = useCallback((index: number, character = 0) => {
@@ -31,7 +31,7 @@ export function usePlayer(doc: ReaderDocument | undefined, engine: Engine, voice
       if (mounted.current) setFraction(position.fraction);
     };
     const player = new BufferedNarrator({
-      segments: chunks, request: { engine: config.engine, voice: config.voice, model: config.model },
+      segments: chunks, request: { engine: 'local', voice: config.voice },
       speed: config.speed, startupSeconds: config.startupSeconds,
       onState: value => { liveState = value; if (mounted.current) setState(value); },
       onProgress: value => { if (liveState === 'idle' && value !== 1) { if (mounted.current) setFraction(value); } else progress(value); },
@@ -56,9 +56,9 @@ export function usePlayer(doc: ReaderDocument | undefined, engine: Engine, voice
   const seekSeconds = useCallback((offset: number) => {
     if (!session.current?.seekSeconds(offset)) jump((current.current.doc?.position || 0) + Math.sign(offset));
   }, [jump]);
-  useEffect(() => { stop(); }, [doc?.id, engine, voice, model, stop]);
+  useEffect(() => { stop(); }, [doc?.id, voice, stop]);
   useEffect(() => {
-    if (!doc || engine !== 'local' || !voice || !prepareEnabled || !window.cadence) return;
+    if (!doc || !voice || !prepareEnabled || !window.cadence) return;
     const abort = new AbortController();
     const chunks = speechPlan(doc.segments, doc.position, 0, 3).slice(0, 3);
     preparation.current = { abort, first: chunks[0]?.text || '' };
@@ -66,13 +66,13 @@ export function usePlayer(doc: ReaderDocument | undefined, engine: Engine, voice
       void (async () => {
         for (const chunk of chunks) {
           if (abort.signal.aborted) return;
-          await synthesize({ text: chunk.text, engine, voice, model }, { signal: abort.signal, priority: 'background' });
+          await synthesize({ text: chunk.text, engine: 'local', voice }, { signal: abort.signal, priority: 'background' });
         }
       })().catch(() => { /* Playback surfaces actionable errors; speculative work is silent. */ });
     }, 200);
     return () => { clearTimeout(timer); abort.abort(); };
     // Prepare on document/voice changes, never on each playback position update.
-  }, [doc?.id, engine, voice, model, prepareEnabled]);
+  }, [doc?.id, voice, prepareEnabled]);
   useEffect(() => { session.current?.setSpeed(speed); }, [speed]);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; session.current?.stop(); }; }, []);
   return { state, fraction, bufferedSeconds, toggle, stop, jump, playFrom, seekSeconds };

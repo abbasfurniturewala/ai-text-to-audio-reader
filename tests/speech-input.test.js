@@ -35,4 +35,11 @@ describe('voice context safety', () => {
     await expect(generateComplete(tts, 'one two three four five six', {}, () => { if (calls >= 2) throw new Error('cancelled'); })).rejects.toThrow('cancelled');
     await expect(generateComplete({ generate: async () => { throw new Error('model failed'); } }, 'Hello.', {})).rejects.toThrow('model failed');
   });
+  it('adds terminal punctuation to unpunctuated heading breaks before synthesis', async () => {
+    const requests = [];
+    const tts = { generate: async text => { requests.push(text); return { audio: new Float32Array(8), sampling_rate: 24000 }; } };
+    await generateComplete(tts, 'Chapter one\n\nA small beginning.', {});
+    await generateComplete(tts, 'Already punctuated.\n\nNext sentence.', {});
+    expect(requests).toEqual(['Chapter one.\n\nA small beginning.', 'Already punctuated.\n\nNext sentence.']);
+  });
 });

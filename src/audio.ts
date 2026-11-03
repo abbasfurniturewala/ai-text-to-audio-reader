@@ -10,7 +10,7 @@ function trimCache() {
   }
 }
 export function clearSpeechCache() { cache.clear(); }
-export function speechKey(request: SpeechRequest) { return JSON.stringify([request.engine, request.voice, request.engine === 'local' ? '' : request.model, request.text]); }
+export function speechKey(request: SpeechRequest) { return JSON.stringify([request.engine || 'local', request.voice, '', request.text]); }
 export async function synthesize(request: SpeechRequest, options: { signal?: AbortSignal; priority?: 'interactive' | 'ahead' | 'background' } = {}): Promise<SpeechAudio> {
   if (!window.cadence) throw new Error('Open the Cadence Windows app to use local neural voices. This browser preview shows the reading interface.');
   if (options.signal?.aborted) throw new DOMException('Speech cancelled', 'AbortError');

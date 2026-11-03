@@ -122,35 +122,18 @@ try {
   await check('Settings and local model readiness', async () => {
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     await page.getByRole('button', { name: 'Local voices are ready', exact: true }).waitFor();
-    await page.getByLabel('ElevenLabs API key', { exact: true }).fill('invalid-test-key');
+    assert.equal(await page.getByText('ElevenLabs').count(), 0);
     await page.getByLabel('Close dialog', { exact: true }).click();
   });
-  await check('ElevenLabs API contract, encrypted key storage and disconnect (mock provider)', async () => {
-    await app.evaluate(() => {
-      globalThis.__cadenceOriginalFetch = globalThis.fetch;
-      globalThis.__cadenceRequests = [];
-      globalThis.fetch = async (url, options) => {
-        globalThis.__cadenceRequests.push({ url: String(url), options });
-        if (String(url).includes('/v2/voices')) return new Response(JSON.stringify({ voices: [{ voice_id: 'TestVoice123', name: 'Test narrator', labels: { accent: 'british', gender: 'male' } }], has_more: false }), { headers: { 'Content-Type': 'application/json' } });
-        return new Response('audio', { headers: { 'Content-Type': 'audio/mpeg' } });
-      };
+  await check('Player controls are centered and include narration speed near the player', async () => {
+    assert.equal(await page.locator('.voice-panel').getByLabel('Narration speed').count(), 0);
+    assert.equal(await page.locator('.player .playback-controls').getByLabel('Narration speed').count(), 1);
+    const alignment = await page.evaluate(() => {
+      const player = document.querySelector('.player').getBoundingClientRect();
+      const controls = document.querySelector('.player .playback-controls').getBoundingClientRect();
+      return Math.abs((controls.left + controls.right) / 2 - (player.left + player.right) / 2);
     });
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
-    await page.getByLabel('ElevenLabs API key', { exact: true }).fill('qa-key-for-mock-provider-only');
-    await page.getByRole('button', { name: 'Connect ElevenLabs', exact: true }).click();
-    await page.getByText('Connected · 1 voices', { exact: true }).waitFor();
-    const stored = await readFile(path.join(env.CADENCE_DATA_DIR, 'eleven-key.enc'));
-    assert.ok(!stored.includes(Buffer.from('qa-key-for-mock-provider-only')));
-    await page.evaluate(() => window.cadence.synthesize({ text: 'An expressive test.', voice: 'TestVoice123', engine: 'eleven', model: 'eleven_v3' }));
-    const requests = await app.evaluate(() => globalThis.__cadenceRequests);
-    const speech = requests.find(r => r.url.includes('/v1/text-to-speech/'));
-    const body = JSON.parse(speech.options.body);
-    assert.equal(body.model_id, 'eleven_v3'); assert.equal(body.text, 'An expressive test.'); assert.equal(body.voice_settings.stability, .5);
-    await page.getByRole('button', { name: 'Disconnect', exact: true }).click();
-    await page.getByRole('button', { name: 'Connect ElevenLabs', exact: true }).waitFor();
-    assert.equal((await page.evaluate(() => window.cadence.status())).connected, false);
-    await page.getByLabel('Close dialog', { exact: true }).click();
-    await app.evaluate(() => { globalThis.fetch = globalThis.__cadenceOriginalFetch; });
+    assert.ok(alignment <= 2, `Playback controls off-center by ${alignment}px`);
   });
   await check('Persistence across reload', async () => {
     await page.waitForTimeout(700);

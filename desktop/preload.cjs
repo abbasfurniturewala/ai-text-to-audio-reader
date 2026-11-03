@@ -16,9 +16,6 @@ contextBridge.exposeInMainWorld('cadence', {
   loadModel: () => ipcRenderer.invoke('reader:load-model'),
   synthesize: (request) => ipcRenderer.invoke('reader:synthesize', request),
   cancelSpeech: (requestId) => ipcRenderer.invoke('reader:cancel-speech', requestId),
-  connectEleven: (key) => ipcRenderer.invoke('reader:connect-eleven', key),
-  disconnectEleven: () => ipcRenderer.invoke('reader:disconnect-eleven'),
-  elevenVoices: () => ipcRenderer.invoke('reader:eleven-voices'),
   saveAudio: (bytes, name) => ipcRenderer.invoke('reader:save-audio', bytes, name),
   onModelProgress: (listener) => {
     const handler = (_, progress) => listener(progress);

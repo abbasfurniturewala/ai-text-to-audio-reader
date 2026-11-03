@@ -5,18 +5,19 @@ Shared memory between Antigravity and Codex. Read this before every task and upd
 ## Current state (as of 2026-11-03)
 
 **Works**
-- Packaged app `release/win-unpacked/Cadence.exe` (v1.0.12) runs on this PC, per the user. Live library: `%APPDATA%\Cadence`.
+- Packaged app `release/win-unpacked/Cadence.exe` (v1.0.12) has been updated with all latest changes (UI updates + PDF subheading separation + unpunctuated heading narration pause) and launched. Previous packaged builds retained at `release/previous-build-20261103-190731` and `release/previous-build-20261103-234829`. Live library: `%APPDATA%\Cadence`.
 - `npm.cmd ci` installs cleanly (461 packages) with bundled Node 22.19.0 / npm 10.9.3.
-- `npm.cmd test`: 10 files, **63/63 passing**.
-- `npm.cmd run build` (tsc -b + vite build): **passes**. Only Vite's large-chunk size notices (expected, limit raised in `vite.config.ts`).
+- `npm.cmd test`: 10 files, **65/65 passing**.
+- `npm.cmd run build` (tsc -b + vite build): **passes**.
+- PDF subheadings (`src/paragraphs.ts`) are now separated from the body paragraphs they introduce via font-change/height (`fontBreak` at 12% or uniform font change) and standalone short-line `headingBreak`, and unpunctuated heading breaks (`\n\n`) in `desktop/speech-input.mjs` (`generateComplete`) are normalized with terminal punctuation (`.\n\n`) before Kokoro synthesis so headings pause naturally before the following sentence.
+- `node scripts/desktop-qa.mjs` & `node scripts/desktop-qa.mjs --packaged`: **17/17 passing** (verified centered player controls, speed control in player bar, and removal of ElevenLabs UI/IPC).
+- ElevenLabs integration completely removed from UI (`src/App.tsx`), types (`src/types.ts`), preload (`desktop/preload.cjs`), and main process (`desktop/main.cjs`); app uses local neural voices exclusively.
+- Bottom player controls (`.playback-controls`) are centered across all window/panel modes via a symmetric 3-column grid on `.player-top`, with the narration speed slider + readout (`.player-speed`) placed directly beside the player controls instead of in the narrator sidebar.
 - fp32 Kokoro model copied to `.cache/models` (needed for dev/packaging builds).
 - Git initialized (branch `main`, remote `origin` → github.com/abbasfurniturewala/ai-text-to-audio-reader), repo-local identity configured (`abbasfurniturewala` / `furniturwewalaabbas@gmail.com`), initial commit created and pushed to `origin/main`.
 
-**Not yet verified on this PC**
-- GUI QA scripts (`desktop-qa`, `resume-qa`, `structure-navigation-qa --synthetic-only`, …) have not been run here.
-- Live ElevenLabs has never been tested with a real key (mock only, from the source PC).
-
 **Known issues / risks**
+- Another copy of the app exists at `C:\Users\Hasan\CadenceReader\release\win-unpacked\Cadence.exe` (created earlier by `MIGRATE-CADENCE.cmd`). The Desktop shortcut `Cadence Reader.lnk` has been repointed to this workspace's `release\win-unpacked\Cadence.exe`.
 - No linter/formatter is configured. `tsc` is the only static check.
 - `npm audit` reports 26 vulnerabilities (17 moderate, 7 high, 2 critical) in the locked tree. Not addressed: fixing them changes the lockfile and needs user approval.
 - `migration/verify-bundle.mjs` / `restore.ps1` now fail in this folder because `AGENTS.md` was edited (expected; the user chose to work in place).
@@ -28,11 +29,34 @@ Shared memory between Antigravity and Codex. Read this before every task and upd
 
 ## Next steps (prioritized)
 
-1. Run GUI QA on this PC, one at a time: `node scripts/desktop-qa.mjs`, `node scripts/resume-qa.mjs`, `node scripts/structure-navigation-qa.mjs --synthetic-only`.
+1. Run remaining GUI QA suites (`resume-qa.mjs`, `structure-navigation-qa.mjs --synthetic-only`) if needed.
 2. Decide with the user whether to review `npm audit` findings (would change the lockfile).
-3. Optional: align README dev instructions (`npm ci`, bundled Node) with AGENTS.md.
 
 ## Session log
+
+### 2026-11-03 – Antigravity (PDF subheading breaks & heading narration pause)
+- **Changes:**
+  - Updated `pdfParagraphs` in `src/paragraphs.ts` to track uniform line `fontName` (`font`), lowered the height `fontBreak` threshold from `0.25` to `0.12` (or uniform font change on standalone headings), and added `headingBreak` so single-line unpunctuated subheadings that stop well short of the right margin (`previous.right < right - previous.height * 3`) break cleanly before a capitalized body paragraph without splitting multi-line paragraphs.
+  - Updated `generateComplete` in `desktop/speech-input.mjs` to normalize unpunctuated paragraph/heading breaks (`/(?<![.!?:;…—–-])\n\n+/g` -> `'.\n\n'`) on a local copy of `text` before calling `tts.generate`, preserving `chunk.text` offsets in `src/speechPlan.ts`.
+  - Added regression unit tests in `tests/paragraphs.test.ts` and `tests/speech-input.test.js`.
+- **Checks:** `npm.cmd test` (65/65 pass), `npm.cmd run build` (passes), `node scripts/package-update.mjs` + `scripts/apply-desktop-update.ps1` (applied and launched `release/win-unpacked/Cadence.exe`).
+- **Open issues:** Note that existing PDFs already imported into IndexedDB cache their extracted segments in `cadence-text:<id>` (`TEXT_VERSION = 2`), so re-import an already-saved PDF if you want its subheadings re-extracted with the new `pdfParagraphs` rules.
+
+### 2026-11-03 – Antigravity (Packaged desktop app & Desktop shortcut update)
+- **Changes:**
+  - Ran `node scripts/package-update.mjs` and applied the staged build to `release/win-unpacked/Cadence.exe` (previous build backed up to `release/previous-build-20261103-190731`).
+  - Repointed the Desktop shortcut `Cadence Reader.lnk` from `C:\Users\Hasan\CadenceReader\release\win-unpacked\Cadence.exe` to `C:\Users\Hasan\Documents\Cadence-1.0.12-Migration-2026-11-01-Windows-x64\release\win-unpacked\Cadence.exe`.
+  - Closed the old running instance and launched the updated `release/win-unpacked/Cadence.exe`.
+- **Checks:** `node scripts/desktop-qa.mjs --packaged` (17/17 pass); verified `release/win-unpacked/Cadence.exe` stays running and Desktop shortcut target is updated.
+- **Open issues:** None.
+
+### 2026-11-03 – Antigravity (UI & ElevenLabs removal)
+- **Changes:**
+  - Centered `.playback-controls` across all window/fullscreen/panel modes in `src/styles.css` and `src/App.tsx` using a symmetric 3-column grid (`.player-top` with `.player-track`, `.playback-controls`, `.player-extras`), removing the `370px` width clamp on `.now-playing` that previously pushed the controls to the left on wide screens.
+  - Moved the narration speed slider and readout (`.player-speed`) from the right narrator sidebar (`.voice-panel`) into `.playback-controls` in the bottom player bar (`src/App.tsx`, `src/styles.css`).
+  - Completely removed ElevenLabs integration and options from `src/App.tsx` (engine switcher, model selector, settings API-key section, status text), `src/usePlayer.ts`, `src/audio.ts`, `src/types.ts`, `desktop/preload.cjs`, `desktop/main.cjs`, and updated `scripts/desktop-qa.mjs`.
+- **Checks:** `npm.cmd test` (63/63 pass), `npm.cmd run build` (passes), `node scripts/desktop-qa.mjs` (17/17 pass).
+- **Open issues:** `release/win-unpacked/Cadence.exe` still holds the pre-change packaged build until `package-update.mjs` + `apply-desktop-update.ps1` are run.
 
 ### 2026-11-03 – Antigravity
 - **Onboarding, no app code changed.** Read AGENTS.md, PROJECT_CONTEXT.md, START_HERE.md, README.md, configs and the source layout. Verified the bundle (2,488 files, 2 books) before any edits.

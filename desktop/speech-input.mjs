@@ -35,7 +35,8 @@ function trimPadding(audio, side) {
 
 export async function generateComplete(tts, text, options, checkCancelled = () => {}) {
   checkCancelled();
-  try { return await tts.generate(text, options); }
+  const input = text.replace(/(?<![.!?:;…—–-])\n\n+/g, '.\n\n');
+  try { return await tts.generate(input, options); }
   catch (error) {
     if (error.code !== 'VOICE_CONTEXT' || text.length < 2) throw error;
     const pieces = contextSplit(text);
