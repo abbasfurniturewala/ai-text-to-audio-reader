@@ -1,7 +1,8 @@
 import { parentPort, workerData } from 'node:worker_threads';
 import { KokoroTTS } from 'kokoro-js';
 import { env, StyleTextToSpeech2Model, AutoTokenizer, RawAudio } from '@huggingface/transformers';
-import { guardTokenWindow, generateComplete } from './speech-input.mjs';
+import { guardTokenWindow } from './speech-input.mjs';
+import { generateVoice } from './speech-voice.mjs';
 import { mkdir } from 'node:fs/promises';
 import { availableParallelism } from 'node:os';
 env.cacheDir = workerData.cacheDir;
@@ -29,9 +30,18 @@ async function model() {
   return modelPromise;
 }
 const queue = [];
-let running = false, active;
+let running = false, closing = false, active;
 const priority = message => ({ interactive: 0, ahead: 1, background: 2 })[message.priority] ?? 0;
 parentPort.on('message', message => {
+  if (message.action === 'shutdown') {
+    if (closing) return;
+    closing = true;
+    for (const item of queue.splice(0)) parentPort.postMessage({ id: item.id, error: 'Speech cancelled' });
+    if (active) active.cancelled = true;
+    if (!running) void shutdown();
+    return;
+  }
+  if (closing) { if (message.id) parentPort.postMessage({ id: message.id, error: 'Speech cancelled' }); return; }
   if (message.action === 'cancel') {
     const index = queue.findIndex(item => item.requestId === message.requestId);
     if (index >= 0) { const [item] = queue.splice(index, 1); parentPort.postMessage({ id: item.id, error: 'Speech cancelled' }); }
@@ -55,8 +65,7 @@ async function drain() {
       if (message.action === 'load') {
         parentPort.postMessage({ id: message.id, ready: true, result: { ready: true } }); continue;
       }
-      if (!Object.hasOwn(tts.voices, message.voice)) throw new Error('This voice is not supported by the local engine.');
-      const audio = await generateComplete(tts, message.text, { voice: message.voice, speed: 1 }, () => {
+      const audio = await generateVoice(tts, message.text, message.voice, () => {
         if (message.cancelled) throw new Error('Speech cancelled');
       });
       const generated = performance.now();
@@ -70,4 +79,11 @@ async function drain() {
   }
   active = undefined;
   running = false;
+  if (closing) await shutdown();
+}
+async function shutdown() {
+  // Let native initialization/inference settle before releasing its sessions.
+  // Terminating a worker inside an ONNX call can crash Electron during exit.
+  try { const tts = await modelPromise; await tts?.model.dispose(); }
+  finally { parentPort.close(); }
 }

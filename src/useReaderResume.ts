@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, type RefObject } from 
 import { readReaderSession, resolveReadingCheckpoint, writeReadingCheckpoint, type ReadingCheckpoint } from './readerSession';
 import type { DocumentLocation } from './locations';
 import type { ReaderDocument } from './types';
+import { readingInset, revealReadingTarget } from './readerView';
 
 interface Options {
   doc?: ReaderDocument; locations: DocumentLocation[]; scroll: RefObject<HTMLDivElement | null>;
@@ -22,16 +23,16 @@ export function useReaderResume(options: Options) {
     const { doc, scroll, locations, reading, original, pdfPage, search } = latest.current;
     const scroller = scroll.current;
     if (!doc || !reading || !scroller || ready.current !== doc.id || search) return;
-    if (original) { save(doc.id, { page: pdfPage, original: true }); return; }
+    if (original && doc.kind === 'PDF') { save(doc.id, { page: Number(scroller.querySelector<HTMLElement>('.pdf-document')?.dataset.page) || pdfPage, original: true }); return; }
     const top = scroller.getBoundingClientRect().top;
     const sections = Array.from(scroller.querySelectorAll<HTMLElement>('[data-location-key]'));
     const section = sections.find(element => element.getBoundingClientRect().bottom > top + 24) || sections.at(-1);
     const location = locations.find(item => item.key === section?.dataset.locationKey);
     if (!section || !location || section.dataset.mounted !== 'true') return;
     const passages = Array.from(section.querySelectorAll<HTMLElement>('[data-passage-index]'));
-    const passage = passages.find(element => element.getBoundingClientRect().bottom > top + 24) || passages.at(-1);
+    const passage = passages.find(element => element.getBoundingClientRect().bottom > top + readingInset(section)) || passages.at(-1);
     const segment = passage ? Number(passage.dataset.passageIndex) : undefined;
-    save(doc.id, { page: location.page, original: false, ...(segment !== undefined ? { segment } : {}) });
+    save(doc.id, { page: location.page, original, ...(segment !== undefined ? { segment } : {}) });
   }, [save]);
   const interrupt = useCallback(() => cancelPending.current(), []);
 
@@ -59,13 +60,21 @@ export function useReaderResume(options: Options) {
     const position = () => {
       const state = latest.current, scroller = state.scroll.current;
       if (cancelled || !scroller || state.doc?.id !== doc.id || !state.reading) return;
-      if (state.original !== point.original || (point.original && state.pdfPage !== point.page)) { frame = requestAnimationFrame(position); return; }
-      if (point.original) scroller.scrollTo({ top: 0, behavior: 'instant' });
+      if (state.original !== point.original) { frame = requestAnimationFrame(position); return; }
+      if (point.original && doc.kind === 'PDF') {
+        const page = scroller.querySelector<HTMLElement>(`[data-pdf-page="${point.page}"]`);
+        if ((!page || page.querySelector('.pdf-loading,.pdf-sheet-loading')) && performance.now() < deadline) { frame = requestAnimationFrame(position); return; }
+        if (page) {
+          const toolbar = scroller.querySelector<HTMLElement>('.pdf-pagination');
+          const inset = toolbar?.getBoundingClientRect().height ? toolbar.getBoundingClientRect().height + (parseFloat(getComputedStyle(scroller).paddingTop) || 0) + 12 : 18;
+          scroller.scrollTo({ top: scroller.scrollTop + page.getBoundingClientRect().top - scroller.getBoundingClientRect().top - inset, behavior: 'instant' });
+        }
+      }
       else {
         const section = scroller.querySelector<HTMLElement>(`[data-location-key="${location.key}"]`);
         const target = point.segment !== undefined ? section?.querySelector<HTMLElement>(`[data-passage-index="${point.segment}"]`) : section;
         if (!target && performance.now() < deadline) { frame = requestAnimationFrame(position); return; }
-        if (target) scroller.scrollTo({ top: scroller.scrollTop + target.getBoundingClientRect().top - scroller.getBoundingClientRect().top - 12, behavior: 'instant' });
+        if (target) revealReadingTarget(scroller, target);
       }
       // Mounting a distant virtualized page updates placeholder measurements.
       // Re-anchor over two frames before allowing ordinary location saves.

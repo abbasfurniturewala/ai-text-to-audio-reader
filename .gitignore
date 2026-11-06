@@ -10,4 +10,5 @@ test-results/
 tools/node/
 migration/library/
 migration/RESTORE_REPORT.json
+desktop/export-core.mjs
 MIGRATION_BUNDLE.json

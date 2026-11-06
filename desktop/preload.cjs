@@ -17,6 +17,17 @@ contextBridge.exposeInMainWorld('cadence', {
   synthesize: (request) => ipcRenderer.invoke('reader:synthesize', request),
   cancelSpeech: (requestId) => ipcRenderer.invoke('reader:cancel-speech', requestId),
   saveAudio: (bytes, name) => ipcRenderer.invoke('reader:save-audio', bytes, name),
+  exportRuntime: () => ipcRenderer.invoke('reader:export-runtime'),
+  exportJobs: () => ipcRenderer.invoke('reader:export-list'),
+  createExport: request => ipcRenderer.invoke('reader:export-create', request),
+  controlExport: (jobId, action) => ipcRenderer.invoke('reader:export-control', jobId, action),
+  exportSample: request => ipcRenderer.invoke('reader:export-sample', request),
+  revealExport: jobId => ipcRenderer.invoke('reader:export-reveal', jobId),
+  onExportProgress: listener => {
+    const handler = (_, message) => listener(message);
+    ipcRenderer.on('reader:export-progress', handler);
+    return () => ipcRenderer.removeListener('reader:export-progress', handler);
+  },
   onModelProgress: (listener) => {
     const handler = (_, progress) => listener(progress);
     ipcRenderer.on('reader:model-progress', handler);

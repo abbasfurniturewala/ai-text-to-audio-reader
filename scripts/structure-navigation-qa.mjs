@@ -3,6 +3,7 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { waitReaderWordVisible } from './reader-qa-helpers.mjs';
 import { navigationPdf } from './navigation-fixture.mjs';
 const require = createRequire(import.meta.url);
 const { _electron } = require('playwright');
@@ -34,7 +35,7 @@ const checks = [], errors = [];
 page.on('pageerror', error => errors.push(error.message));
 async function check(name, run) { await run(); checks.push(name); console.log(`PASS ${name}`); }
 async function openNavigation() { if (await page.getByLabel('Document navigation', { exact: true }).getAttribute('aria-expanded') !== 'true') await page.getByLabel('Document navigation', { exact: true }).click(); }
-async function upload(name) { await page.locator('input[type=file]').setInputFiles(`test-results/fixtures/${name}`); await page.getByRole('heading', { name: name.replace(/\.[^.]+$/, ''), exact: true }).waitFor(); await openNavigation(); }
+async function upload(name) { await page.locator('input[type=file]').setInputFiles(`test-results/fixtures/${name}`); await page.getByRole('heading', { name: name.replace(/\.[^.]+$/, ''), exact: true, level: 1 }).waitFor(); await openNavigation(); }
 const topic = title => page.locator('.navigation-topic').filter({ has: page.getByText(title, { exact: true }) });
 const jump = async number => { const input = page.getByLabel('Go to original page', { exact: true }); await input.fill(String(number)); await input.press('Enter'); await page.waitForFunction(number => document.querySelector('.viewing-location')?.dataset.location === `page-${number}`, number); };
 const mainTitles = () => page.locator('.navigation-list > .navigation-tree > li > .navigation-row .navigation-topic b').allTextContents();
@@ -60,7 +61,7 @@ try {
     await page.waitForFunction(() => document.querySelector('.viewing-location')?.dataset.location === 'page-3');
     const heading = page.locator('.passage').filter({ hasText: /^1\.2 Supply$/ });
     await heading.waitFor();
-    assert.ok(Math.abs(await heading.evaluate(element => element.getBoundingClientRect().top - element.closest('.reader-scroll').getBoundingClientRect().top) - 12) < 6);
+    await waitReaderWordVisible(heading, 4, 28);
     assert.equal(await topic('1.2 Supply').getAttribute('aria-current'), 'location');
     await topic('1.1 Demand').click();
     await page.waitForTimeout(150);
@@ -70,12 +71,13 @@ try {
   await check('Subsection search preserves its parent and original PDF jumps use the precise destination', async () => {
     await page.getByLabel('Filter document navigation', { exact: true }).fill('supply');
     assert.deepEqual(await page.locator('.navigation-topic b').allTextContents(), ['Chapter 1', '1.2 Supply']);
-    await page.getByRole('button', { name: 'Original PDF', exact: true }).click();
+    await page.getByRole('button', { name: 'Document view', exact: true }).click();
     await page.locator('.pdf-loading').waitFor({ state: 'hidden' });
     await topic('1.2 Supply').click();
     await page.waitForTimeout(200);
     const offset = await page.locator('.pdf-text-layer span').filter({ hasText: /^1\.2 Supply$/ }).evaluate(element => element.getBoundingClientRect().top - element.closest('.reader-scroll').getBoundingClientRect().top);
-    assert.ok(offset >= -20 && offset < 40, `Heading offset ${offset}`);
+    const toolbar = await page.locator('.pdf-pagination').evaluate(element => element.getBoundingClientRect().bottom - element.closest('.reader-scroll').getBoundingClientRect().top);
+    assert.ok(offset >= toolbar && offset < toolbar + 55, `Heading offset ${offset}, toolbar ${toolbar}`);
     await page.getByLabel('Filter document navigation', { exact: true }).fill('');
     await page.screenshot({ path: 'test-results/structured-navigation.png' });
   });
@@ -83,15 +85,15 @@ try {
     await page.getByLabel('Next PDF page', { exact: true }).click();
     await page.getByText('Page 4 of 50', { exact: true }).waitFor();
     await page.locator('.pdf-loading').waitFor({ state: 'hidden' });
-    assert.ok(await page.locator('.reader-scroll').evaluate(element => element.scrollTop) < 3);
+    assert.ok(await page.locator('[data-pdf-page="4"]').evaluate(element => Math.abs(element.getBoundingClientRect().top - element.closest('.reader-scroll').querySelector('.pdf-pagination').getBoundingClientRect().bottom - 12) < 10));
     await page.getByLabel('Previous PDF page', { exact: true }).click();
     await page.locator('.pdf-loading').waitFor({ state: 'hidden' });
-    assert.ok(await page.locator('.reader-scroll').evaluate(element => element.scrollTop) < 3);
+    assert.ok(await page.locator('[data-pdf-page="3"]').evaluate(element => Math.abs(element.getBoundingClientRect().top - element.closest('.reader-scroll').querySelector('.pdf-pagination').getBoundingClientRect().bottom - 12) < 10));
     await topic('1.2 Supply').click();
     await page.getByRole('button', { name: 'Go to audio', exact: true }).click();
     await page.getByText('Page 1 of 50', { exact: true }).waitFor();
     await page.locator('.pdf-loading').waitFor({ state: 'hidden' });
-    assert.ok(await page.locator('.reader-scroll').evaluate(element => element.scrollTop) < 3);
+    assert.ok(await page.locator('[data-pdf-page="1"] .pdf-text-layer span').filter({ hasText: /^On page 1 passage 1 we / }).evaluate(element => { const box = element.getBoundingClientRect(), scroller = element.closest('.reader-scroll'); return box.top >= scroller.querySelector('.pdf-pagination').getBoundingClientRect().bottom && box.bottom <= scroller.getBoundingClientRect().bottom; }));
   });
   await check('Page mode is bounded and supports page groups and direct search', async () => {
     await page.getByRole('button', { name: 'Pages', exact: true }).click();

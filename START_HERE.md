@@ -1,5 +1,11 @@
 # Move Cadence to your new Windows PC
 
+## Current workspace: already restored and developed in place
+
+As of2026-11-06, work in this extracted directory. **Do not run restore.ps1 or MIGRATE-CADENCE.cmd here.** Open Cadence through the Desktop shortcut or Start Cadence.cmd. The approved live library and export jobs are in `%USERPROFILE%\CadenceReaderData`; never use that folder for tests. The current app has23 local voices, EPUB support and a persistent M4B manager under Menu → Audio exports. ElevenLabs and Qwen were removed. Read `AGENTS.md`, `docs/HANDOFF.md`, `PROJECT_CONTEXT.md` and `README.md` for current development state, build/installation rules and verification.
+
+The remainder describes the original2026-11-01 snapshot transfer to another PC. Its eight-voice/ElevenLabs/AppData references are historical. Git stores source/context, not the personal library, model/runtime caches or packaged app. OneDrive is a transfer/backup, not live database synchronization.
+
 This bundle is for Windows with an Intel/AMD 64-bit processor. It contains the working app, full source, the exact current voice model, Node/npm tools, saved books, bookmarks, and reading positions. You do not need to recreate the app from this chat.
 
 ## On the new device

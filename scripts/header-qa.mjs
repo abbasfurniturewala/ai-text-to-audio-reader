@@ -46,7 +46,7 @@ try {
     });
     await page.screenshot({ path: 'test-results/header-compact-1280.png' });
     await check('Search, type controls, bookmarks and page navigation remain accessible', async () => {
-      for (const name of ['Close document', 'Remove current document', 'Search document', 'Change typeface', 'Smaller text', 'Larger text', 'Bookmark current passage', 'Document navigation']) assert.equal(await page.getByRole('button', { name, exact: true }).isVisible(), true, name);
+      for (const name of ['Close document', 'Remove current document', 'Search document', 'Change typeface', 'Smaller text', 'Larger text', 'Bookmark viewed passage', 'Document navigation']) assert.equal(await page.getByRole('button', { name, exact: true }).isVisible(), true, name);
       await page.getByRole('button', { name: 'Search document', exact: true }).click();
       await page.getByLabel('Search document text', { exact: true }).fill('calm story');
       assert.ok(await page.locator('.passage').count() > 0);
@@ -57,15 +57,15 @@ try {
       await page.getByLabel('Go to original page', { exact: true }).fill('4');
       await page.getByLabel('Go to original page', { exact: true }).press('Enter');
       await page.waitForFunction(() => document.querySelector('.viewing-location')?.dataset.location === 'page-4');
-      await page.getByRole('button', { name: 'Bookmark current passage', exact: true }).click();
+      await page.getByRole('button', { name: 'Bookmark viewed passage', exact: true }).click();
       assert.equal(await page.getByRole('button', { name: 'Remove bookmark', exact: true }).isVisible(), true);
       assert.equal(await page.getByRole('button', { name: 'Go to audio', exact: true }).isVisible(), true);
       assert.equal(await page.getByRole('button', { name: 'Follow audio', exact: true }).isVisible(), true);
     });
     await check('Original PDF shares the compact controls', async () => {
-      await page.getByRole('button', { name: 'Original PDF', exact: true }).click();
+      await page.getByRole('button', { name: 'Document view', exact: true }).click();
       await page.locator('.pdf-loading').waitFor({ state: 'hidden' });
-      assert.equal(await page.locator('.pdf-page canvas').isVisible(), true);
+      assert.equal(await page.locator('.pdf-page-slot[data-current="true"] canvas').isVisible(), true);
       assert.equal((await measure()).headerHeight, initial.headerHeight);
     });
     await check('Controls wrap without overlap at 1024px', async () => {

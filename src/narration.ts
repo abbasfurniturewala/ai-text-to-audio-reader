@@ -2,6 +2,7 @@ import processorUrl from '@soundtouchjs/audio-worklet/processor?url';
 import { synthesize, speechBuffer } from './audio';
 import { isHeading } from './paragraphs';
 import type { Segment, SpeechRequest } from './types';
+import type { SegmentSource } from './segmentSource';
 
 export type PlaybackState = 'idle' | 'loading' | 'playing' | 'paused';
 interface Output {
@@ -15,7 +16,7 @@ interface Scheduled {
   offset: number; duration: number; rate: number;
 }
 interface Options {
-  segments: Segment[];
+  segments: Segment[] | SegmentSource;
   request: Omit<SpeechRequest, 'text'>;
   speed: number;
   startupSeconds?: number;
@@ -25,13 +26,23 @@ interface Options {
   onBuffer(seconds: number): void;
   onError(message: string): void;
   createContext?: () => AudioContext;
+  releaseContext?: (context: AudioContext) => void;
   createOutput?: (context: AudioContext, speed: number) => Promise<Output>;
   load?: (request: SpeechRequest, context: AudioContext) => Promise<AudioBuffer>;
 }
 
+const processors = new WeakMap<AudioContext, Promise<typeof import('@soundtouchjs/audio-worklet').SoundTouchNode>>();
+export function prepareNarration(context: AudioContext) {
+  let pending = processors.get(context);
+  if (!pending) {
+    pending = import('@soundtouchjs/audio-worklet').then(async ({ SoundTouchNode }) => { await SoundTouchNode.register(context, processorUrl); return SoundTouchNode; })
+      .catch(error => { processors.delete(context); throw error; });
+    processors.set(context, pending);
+  }
+  return pending;
+}
 async function createOutput(context: AudioContext, speed: number): Promise<Output> {
-  const { SoundTouchNode } = await import('@soundtouchjs/audio-worklet');
-  await SoundTouchNode.register(context, processorUrl);
+  const SoundTouchNode = await prepareNarration(context);
   const node = new SoundTouchNode({ context, outputChannelCount: 1 });
   node.playbackRate.value = speed;
   node.connect(context.destination);
@@ -57,6 +68,14 @@ export function speechBounds(samples: Float32Array, rate: number, lead = .06, ta
   return { offset: start / rate, duration: (end - start) / rate };
 }
 
+export function speechClipBounds(samples: Float32Array, rate: number, segment: Segment, next?: Segment) {
+  const last = (segment as { parts?: { segment: number }[] }).parts?.at(-1)?.segment;
+  const following = (next as { parts?: { segment: number }[] } | undefined)?.parts?.[0]?.segment;
+  const heading = segment.heading ?? (!/\n/.test(segment.text) && isHeading(segment.text));
+  const paragraph = !next || (last !== undefined && following !== undefined && last !== following);
+  return speechBounds(samples, rate, rate >= 8000 ? .10 : .06, rate >= 8000 ? (heading ? .64 : paragraph ? .54 : .42) : .12);
+}
+
 /** A bounded look-ahead queue. Clip handoffs use the audio clock, never onended. */
 export class BufferedNarrator {
   private context: AudioContext | undefined;
@@ -80,6 +99,8 @@ export class BufferedNarrator {
 
   constructor(private options: Options) { this.speed = options.speed; }
 
+  private segment(index: number) { return Array.isArray(this.options.segments) ? this.options.segments[index] : this.options.segments.get(index); }
+
   private setState(state: PlaybackState) {
     if (this.state !== state) { this.state = state; this.options.onState(state); }
   }
@@ -88,7 +109,7 @@ export class BufferedNarrator {
     this.stop();
     this.abort = new AbortController();
     const token = this.generation;
-    if (!this.options.segments[index]) return;
+    if (!this.segment(index)) return;
     this.completed = false;
     this.startIndex = this.nextPrepare = this.nextSchedule = index;
     this.firstOffset = Math.max(0, offset);
@@ -98,12 +119,15 @@ export class BufferedNarrator {
     try {
       const context = this.options.createContext?.() || new AudioContext({ sampleRate: 24000 });
       this.context = context;
+      // A clicked passage must not wait behind device/worklet initialization.
+      const opening = this.load(this.segment(index)!, context);
+      void opening.catch(() => {});
       await context.resume();
       const output = await (this.options.createOutput || createOutput)(context, this.speed);
       if (token !== this.generation) { output.dispose(); return; }
       this.output = output;
       this.timer = setInterval(() => this.tick(), 40);
-      void this.fill(token);
+      void this.fill(token, opening);
     } catch (error) { if (token === this.generation) this.fail(error); }
   }
 
@@ -114,7 +138,10 @@ export class BufferedNarrator {
     this.timer = undefined;
     this.clearSources();
     this.output?.dispose(); this.output = undefined;
-    if (this.context) void this.context.close().catch(() => {});
+    if (this.context) {
+      if (this.options.releaseContext) this.options.releaseContext(this.context);
+      else void this.context.close().catch(() => {});
+    }
     this.context = undefined;
     this.prepared.clear();
     this.filling = false; this.pendingError = undefined; this.recovering = true;
@@ -162,29 +189,32 @@ export class BufferedNarrator {
     if (this.state !== 'paused') this.setState('playing');
   }
 
-  private async fill(token: number) {
+  private async load(segment: Segment, context: AudioContext) {
+    const request = { ...this.options.request, text: segment.text };
+    return this.options.load ? this.options.load(request, context) : synthesize(request, { signal: this.abort.signal, priority: this.scheduled.length ? 'ahead' : 'interactive' }).then(speech => speechBuffer(speech, context));
+  }
+
+  private async fill(token: number, opening?: Promise<AudioBuffer>) {
     if (this.filling || !this.context || this.pendingError || this.state === 'idle') return;
     this.filling = true;
     const context = this.context;
     try {
-      while (token === this.generation && this.nextPrepare < this.options.segments.length) {
+      while (token === this.generation) {
         const now = context.currentTime;
         const ahead = Math.max(0, (this.scheduled.at(-1)?.end || now) - now) + this.availableSeconds();
         const active = this.scheduled.find(clip => clip.end > now)?.index ?? this.nextSchedule;
         if (this.nextPrepare - active >= 12 || ahead >= Math.max(20, (this.options.startupSeconds ?? 0) + 10)) break;
         const index = this.nextPrepare;
-        const request = { ...this.options.request, text: this.options.segments[index].text };
-        const buffer = await (this.options.load ? this.options.load(request, context) :
-          synthesize(request, { signal: this.abort.signal, priority: this.scheduled.length ? 'ahead' : 'interactive' }).then(speech => speechBuffer(speech, context)));
+        const seg = this.segment(index);
+        if (!seg) break;
+        const buffer = await (opening || this.load(seg, context));
+        opening = undefined;
         if (token !== this.generation) return;
         if (!buffer.length) throw new Error('The voice engine returned empty audio. Try this passage again.');
-        const seg = this.options.segments[index], next = this.options.segments[index + 1];
-        const lastSeg = (seg as { parts?: { segment: number }[] }).parts?.at(-1)?.segment;
-        const nextSeg = (next as { parts?: { segment: number }[] } | undefined)?.parts?.[0]?.segment;
-        const headingClip = Boolean(seg.heading || (!/\n/.test(seg.text) && isHeading(seg.text)));
-        const paragraphEnd = !next || (lastSeg !== undefined && nextSeg !== undefined && lastSeg !== nextSeg);
-        const realSpeech = buffer.sampleRate >= 8000;
-        const bounds = speechBounds(buffer.getChannelData(0), buffer.sampleRate, realSpeech ? .10 : .06, realSpeech ? (headingClip ? .64 : paragraphEnd ? .54 : .42) : .12);
+        // One metadata lookahead preserves boundary pacing and discovers EOF,
+        // even if the last complete phrase exceeds the time reserve.
+        const next = this.segment(index + 1);
+        const bounds = speechClipBounds(buffer.getChannelData(0), buffer.sampleRate, seg, next);
         this.prepared.set(index, { buffer, ...bounds });
         this.nextPrepare++;
         this.scheduleReady();
@@ -208,6 +238,7 @@ export class BufferedNarrator {
       const clip = this.prepared.get(current.index)!;
       this.options.onProgress(Math.min(1, (current.offset + (now - current.start) * current.rate) / clip.duration));
       for (const [index] of this.prepared) { if (index < current.index - 2) this.prepared.delete(index); }
+      if (!Array.isArray(this.options.segments)) this.options.segments.release(current.index - 2);
       this.scheduled = this.scheduled.filter(clip => { if (clip.index < current.index) { clip.source.disconnect(); return false; } return true; });
     }
     const tail = this.scheduled.at(-1);

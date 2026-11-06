@@ -81,10 +81,10 @@ export async function deleteDocument(id: string) {
   });
 }
 
-const refreshHeadings = (segments: Segment[]) => segments.map((segment, index) => ({
+export const refreshHeadings = (segments: Segment[], infer = false) => infer ? segments.map((segment, index) => ({
   ...segment,
-  heading: Boolean(segment.heading || (isHeading(segment.text) && !/^[a-z]/.test(segments[index + 1]?.text.trim() || ''))),
-}));
+  heading: Boolean(segment.heading || (!/[?!]["'”’]*$/.test(segment.text.trim()) && isHeading(segment.text) && !/^[a-z]/.test(segments[index + 1]?.text.trim() || ''))),
+})) : segments;
 
 export async function loadDocumentText(id: string) {
   const segments = await get<Segment[]>(textKey(id), store);
@@ -108,7 +108,7 @@ export async function openDocumentText(id: string): Promise<{ segments: Segment[
         try {
           if (!text.result) throw new Error('This document has no saved text.');
           if ((item.textVersion || 0) >= TEXT_VERSION) {
-            result = { segments: refreshHeadings(text.result as Segment[]), item };
+            result = { segments: refreshHeadings(text.result as Segment[], item.kind === 'PDF'), item };
             return;
           }
           const { segments, indexMap } = repairLegacyParagraphs(text.result);

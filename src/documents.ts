@@ -5,6 +5,8 @@ import type { ReaderDocument, Segment } from './types';
 import { extractPdfStructure } from './topics';
 import { NAVIGATION_VERSION, pdfPageHints, textTopics, type PdfPageHints } from './structure';
 import { splitText, pdfParagraphs, TEXT_VERSION } from './paragraphs';
+import { pdfMarginCandidates, stripPdfRunningHeaders, type PdfMargin } from './pdfMargins';
+import { readEpub } from './epub';
 export { splitText } from './paragraphs';
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 export { pdfjs };
@@ -32,21 +34,23 @@ export async function importDocument(file: File, options: { signal?: AbortSignal
     options.signal?.addEventListener('abort', cancel, { once: true });
     try {
       const pdf = await task.promise;
-      const segments: Segment[] = [];
+      const pages: { page: number; segments: Segment[]; margins: PdfMargin[] }[] = [];
       const hasOutline = !!(await pdf.getOutline().catch(() => null))?.length;
       const hints: PdfPageHints[] = [];
       for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber++) {
         checkCancelled();
         const page = await pdf.getPage(pageNumber);
         const content = await page.getTextContent();
-        segments.push(...pdfParagraphs(content.items.filter(item => 'str' in item), pageNumber));
+        const items = content.items.filter(item => 'str' in item);
+        pages.push({ page: pageNumber, segments: pdfParagraphs(items, pageNumber), margins: pdfMarginCandidates(items, page.view[3] - page.view[1]) });
         if (!hasOutline) hints.push(pdfPageHints(content.items.filter(item => 'str' in item), pageNumber));
         page.cleanup();
         options.onProgress?.(pageNumber, pdf.numPages);
       }
       checkCancelled();
-      if (!segments.length) throw new Error('This PDF has no selectable text. Scanned pages need OCR before they can be read aloud.');
       const pageLabels = await pdf.getPageLabels().catch(() => null) || [];
+      const segments = stripPdfRunningHeaders(pages, pageLabels);
+      if (!segments.length) throw new Error('This PDF has no selectable text. Scanned pages need OCR before they can be read aloud.');
       const navigation = await extractPdfStructure(pdf, { segments, ...(hasOutline ? {} : { hints }), labels: pageLabels, signal: options.signal });
       checkCancelled();
       return { id: crypto.randomUUID(), title, kind: 'PDF', created: Date.now(), updated: Date.now(), segments, pageCount: pdf.numPages, position: 0, bookmarks: [], bytes, pageLabels, ...navigation, navigationVersion: NAVIGATION_VERSION, textVersion: TEXT_VERSION };
@@ -66,7 +70,13 @@ export async function importDocument(file: File, options: { signal?: AbortSignal
     return fromSegments(title, segments, 'DOCX');
   }
   if (['txt', 'md'].includes(extension || '')) { const text = await file.text(); checkCancelled(); return makeDocument(title, text, 'TXT'); }
-  throw new Error('Choose a PDF, DOCX, TXT or Markdown file. For older Word documents, save a copy as DOCX first.');
+  if (extension === 'epub') {
+    const book = await readEpub(new Uint8Array(await file.arrayBuffer()), { signal: options.signal });
+    checkCancelled();
+    const doc = fromSegments(book.title || title, book.segments, 'EPUB');
+    return book.topics.length ? { ...doc, topics: book.topics, navigationSource: 'outline' } : doc;
+  }
+  throw new Error('Choose a PDF, DOCX, EPUB, TXT or Markdown file. For older Word documents, save a copy as DOCX first.');
 }
 
 export async function readPdfNavigation(bytes: ArrayBuffer, signal?: AbortSignal, segments: Segment[] = []): Promise<Pick<ReaderDocument, 'pageLabels' | 'topics' | 'navigationVersion' | 'navigationSource'>> {

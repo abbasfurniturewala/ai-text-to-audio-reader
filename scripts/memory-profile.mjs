@@ -22,7 +22,7 @@ page.on('pageerror', error => errors.push(error.message));
 async function sample(phase) {
   await page.waitForTimeout(2500);
   const processes = await app.evaluate(({ app }) => app.getAppMetrics().map(({ type, memory }) => ({ type, ...memory })));
-  const dom = await page.evaluate(() => ({ elements: document.getElementsByTagName('*').length, words: document.querySelectorAll('.read-word').length, sections: document.querySelectorAll('.reading-page-section').length }));
+  const dom = await page.evaluate(() => ({ elements: document.getElementsByTagName('*').length, textRuns: document.querySelectorAll('[data-reader-text]').length, fallbackWordSpans: document.querySelectorAll('.read-word').length, sections: document.querySelectorAll('.reading-page-section').length }));
   const heap = await cdp.send('Runtime.getHeapUsage');
   const snapshot = { phase, workingSetMB: Math.round(processes.reduce((n, p) => n + p.workingSetSize, 0) / 1024), heapUsedMB: Math.round(heap.usedSize / 1048576), processes, ...dom };
   snapshots.push(snapshot); console.log(JSON.stringify(snapshot));
@@ -30,7 +30,8 @@ async function sample(phase) {
 }
 try {
   await page.getByRole('heading', { name: 'The art of paying attention', exact: true }).waitFor();
-  await page.waitForFunction(async () => (await window.cadence.status()).modelReady);
+  const readyDeadline = Date.now() + 180000;
+  while (!(await page.evaluate(() => window.cadence.status())).modelReady) { if (Date.now() >= readyDeadline) throw new Error('The local model did not become ready'); await page.waitForTimeout(100); }
   await sample('welcome');
   await page.locator('input[type=file]').setInputFiles(book);
   await page.getByRole('heading', { name: path.basename(book, '.pdf').replaceAll('_', ' '), exact: true }).waitFor();
@@ -40,7 +41,7 @@ try {
   await page.waitForTimeout(5000);
   await sample('book-playing');
   await page.getByLabel('Pause narration', { exact: true }).click();
-  await page.getByRole('button', { name: 'Original PDF', exact: true }).click();
+  await page.getByRole('button', { name: 'Document view', exact: true }).click();
   await page.locator('.pdf-loading').waitFor({ state: 'hidden' });
   await sample('book-original');
   if (!baseline) {

@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createServer } from 'vite';
 import electron from 'electron';
+await import('./build-export.mjs');
 const server = await createServer();
 await server.listen();
 const env = { ...process.env, CADENCE_DEV_URL: 'http://127.0.0.1:5177' };

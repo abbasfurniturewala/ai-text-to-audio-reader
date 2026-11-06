@@ -43,7 +43,7 @@ await check('Round-trip preserves IDs, text, bookmarks, audio positions, PDF byt
 await check('Re-import is idempotent and preserves newer destination state', async () => {
   await withReader({ app, profile }, async evaluate => {
     await evaluate("localStorage.setItem('cadence-speed', '1.25'); undefined");
-    await evaluate("document.querySelector('[aria-label=\"Bookmark current passage\"],[aria-label=\"Remove bookmark\"]')?.click(); undefined");
+    await evaluate("document.querySelector('[aria-label=\"Bookmark viewed passage\"],[aria-label=\"Remove bookmark\"]')?.click(); undefined");
     await new Promise(resolve => setTimeout(resolve, 100));
   });
   const before = await withReader({ app, profile }, evaluate => evaluate("(async()=>({items:await __migrationGet('cadence-library-index-v2')}))()"));

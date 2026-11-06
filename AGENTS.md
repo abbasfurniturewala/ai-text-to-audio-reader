@@ -18,7 +18,7 @@ Read `PROJECT_CONTEXT.md`, `START_HERE.md`, and `README.md` before changing beha
 - The user chose to work **in place** in this extracted folder (`Documents\Cadence-1.0.12-Migration-...`). No restore/copy to `%USERPROFILE%\CadenceReader`. Do not run `migration/restore.ps1` or `MIGRATE-CADENCE.cmd` unless the user asks.
 - Because tracked files are now edited, `migration/verify-bundle.mjs` will report "File is incomplete or changed" and `restore.ps1` will refuse to run from here. That is expected. Do not regenerate `MIGRATION_BUNDLE.json` unless asked.
 - Git was initialized here on 2026-11-03, branch `main`, remote `origin` = https://github.com/abbasfurniturewala/ai-text-to-audio-reader. Git is PortableGit at `%LOCALAPPDATA%\Programs\PortableGit\cmd` (on the user PATH for new shells).
-- The user's live library is `%APPDATA%\Cadence` (IndexedDB). Never point tests or scripts at it.
+- Historical live library was `%APPDATA%\Cadence` (IndexedDB). On 2026-11-06 the user approved recovering into `%USERPROFILE%\CadenceReaderData`, retaining the original profiles, to avoid Codex/MSIX AppData virtualization. This is now the live library/export-job folder. Never point tests or scripts at either live location; use an explicit isolated `CADENCE_DATA_DIR`.
 
 ## Tech stack
 

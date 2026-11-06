@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { clickReaderWord, menuClick } from './reader-qa-helpers.mjs';
 const require = createRequire(import.meta.url);
 const { _electron } = require('playwright');
 const version = JSON.parse(await readFile('package.json', 'utf8')).version;
@@ -60,12 +61,12 @@ try {
   });
   await page.getByLabel('Go to original page', { exact: true }).fill('10');
   await page.getByLabel('Go to original page', { exact: true }).press('Enter');
-  await page.locator('[data-location-key="page-10"] .read-word').first().waitFor();
+  await page.locator('[data-location-key="page-10"] [data-reader-text]').first().waitFor();
   await check('The screenshot sentence is sent to the voice intact, and clicking inside the repaired block is exact', async () => {
-    await page.locator('[data-location-key="page-10"] .read-word').first().click();
+    await clickReaderWord(page.locator('[data-location-key="page-10"] .passage').first());
     await page.getByLabel('Pause narration', { exact: true }).waitFor();
     assert.ok((await app.evaluate(() => globalThis.__paragraphRequests)).includes(beginning + ' homilies.'));
-    await page.locator('.read-word').filter({ hasText: /^ethical$/ }).click();
+    await clickReaderWord(page.locator('.passage').filter({ hasText: 'ethical' }).first(), 'ethical');
     await page.getByLabel('Pause narration', { exact: true }).waitFor();
     assert.ok((await app.evaluate(() => globalThis.__paragraphRequests)).some(text => text.startsWith('ethical homilies.')));
     await page.getByLabel('Pause narration', { exact: true }).click();
@@ -79,7 +80,7 @@ try {
   await check('Long display paragraphs remain intact and exports use complete sentence requests', async () => {
     const sentence = 'A paragraph can contain many sentences and keep its natural layout while the voice prepares complete thoughts in the background.';
     const paragraph = Array(20).fill(sentence).join(' ');
-    await page.getByLabel('Paste text', { exact: true }).click();
+    await menuClick(page.getByLabel('Paste text', { exact: true }));
     await page.getByLabel('Document title', { exact: true }).fill('Long paragraph');
     await page.getByLabel('Your text', { exact: true }).fill(paragraph);
     await page.getByRole('button', { name: 'Add to my library' }).click();
@@ -89,6 +90,7 @@ try {
     await app.evaluate(() => { globalThis.__paragraphRequests = []; });
     await page.locator('.voice-option').filter({ hasText: 'George' }).click();
     await page.getByRole('button', { name: 'Export audio', exact: true }).click();
+    await page.getByLabel('Audio format', { exact: true }).selectOption('wav');
     await page.getByRole('button', { name: 'Create audio file', exact: true }).click();
     await page.getByRole('button', { name: 'Save WAV', exact: true }).waitFor({ timeout: 60000 });
     const requests = await app.evaluate(() => globalThis.__paragraphRequests);

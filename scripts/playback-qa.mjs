@@ -1,3 +1,4 @@
+import { menuClick } from './reader-qa-helpers.mjs';
 import { createRequire } from 'node:module';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -15,6 +16,7 @@ const errors = [];
 page.on('pageerror', error => errors.push(error.message));
 await page.addInitScript(() => {
   window.__audioRuns = [];
+  window.__activeAudioRun = () => [...window.__audioRuns].reverse().find(run => run.starts.length && run.context.state !== 'closed') || [...window.__audioRuns].reverse().find(run => run.starts.length);
   const Native = window.AudioContext;
   window.AudioContext = class extends Native {
     constructor(options) {
@@ -40,7 +42,7 @@ await page.addInitScript(() => {
       const entry = window.__audioRuns.find(run => run.context === this.context);
       if (entry && !entry.analyser) {
         const analyser = this.context.createAnalyser(); analyser.fftSize = 512;
-        connect.call(this, analyser); entry.analyser = analyser;
+        entry.analyser = analyser;
         const data = new Float32Array(512);
         const timer = setInterval(() => {
           if (this.context.state === 'closed') { clearInterval(timer); return; }
@@ -48,6 +50,7 @@ await page.addInitScript(() => {
           entry.samples.push({ at: this.context.currentTime, rms: Math.sqrt(data.reduce((sum, sample) => sum + sample * sample, 0) / data.length) });
         }, 10);
       }
+      if (entry?.analyser) connect.call(this, entry.analyser);
     }
     return result;
   };
@@ -76,12 +79,12 @@ try {
       return { bytes: new Uint8Array(request.text.length < 20 ? clips.short : clips.long), mime: 'audio/wav', sampleRate: 24000 };
     });
   }, { short: wav(.16), long: wav(1.2) });
-  await page.getByLabel('Paste text', { exact: true }).click();
+  await menuClick(page.getByLabel('Paste text', { exact: true }));
   await page.getByLabel('Document title', { exact: true }).fill('Continuous playback test');
   await page.getByLabel('Your text', { exact: true }).fill(Array.from({ length: 24 }, (_, i) => i % 2 === 0 ? `Heading ${i}` : `A short paragraph number ${i}, ready for continuous narration.`).join('\n\n'));
   await page.getByRole('button', { name: 'Add to my library' }).click();
   await check('Preprocessing settings persist', async () => {
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await menuClick(page.getByRole('button', { name: 'Settings', exact: true }));
     await page.getByLabel('Playback buffer').selectOption('8');
     assert.equal(await page.evaluate(() => localStorage.getItem('cadence-startup-v2')), '8');
     await page.getByLabel('Playback buffer').selectOption('0');
@@ -91,10 +94,11 @@ try {
   await check('Short paragraphs play continuously despite slow generation', async () => {
     await page.getByLabel('Play narration', { exact: true }).click();
     await page.getByLabel('Pause narration', { exact: true }).waitFor({ timeout: 30000 });
-    await page.waitForFunction(() => window.__audioRuns[0]?.starts.length >= 12, { timeout: 30000 });
+    await page.waitForFunction(() => window.__audioRuns.some(run => run.starts.length >= 12), { timeout: 30000 });
     await page.waitForFunction(() => Array.from(document.querySelectorAll('.passage')).at(-1)?.getAttribute('aria-current') === 'true', { timeout: 30000 });
+    await page.mouse.move(8, 8);
     await page.getByLabel('Play narration', { exact: true }).waitFor();
-    const run = await page.evaluate(() => ({ starts: window.__audioRuns[0].starts, samples: window.__audioRuns[0].samples }));
+    const run = await page.evaluate(() => { const run = window.__audioRuns.find(run => run.starts.length >= 12); return { starts: run.starts, samples: run.samples }; });
     await writeFile('test-results/continuous-audio-timing.json', JSON.stringify(run, null, 2));
     assert.equal(run.starts.length, 12);
     for (let i = 1; i < run.starts.length; i++) {
@@ -113,14 +117,14 @@ try {
     await page.getByLabel('Pause narration', { exact: true }).waitFor();
     await page.waitForTimeout(150);
     await page.getByLabel('Pause narration', { exact: true }).click();
-    const before = await page.evaluate(() => window.__audioRuns.at(-1).context.currentTime);
+    const before = await page.evaluate(() => window.__activeAudioRun().context.currentTime);
     await page.waitForTimeout(350);
-    const after = await page.evaluate(() => window.__audioRuns.at(-1).context.currentTime);
+    const after = await page.evaluate(() => window.__activeAudioRun().context.currentTime);
     assert.equal(after, before);
     await page.getByLabel('Play narration', { exact: true }).click();
     await page.getByLabel('Pause narration', { exact: true }).waitFor();
     await page.waitForTimeout(200);
-    const resumed = await page.evaluate(() => window.__audioRuns.at(-1).context.currentTime);
+    const resumed = await page.evaluate(() => window.__activeAudioRun().context.currentTime);
     assert.ok(resumed > after);
   });
   await check('Faster playback remains continuous and compensates voice pitch', async () => {
@@ -130,7 +134,7 @@ try {
       element.dispatchEvent(new Event('change', { bubbles: true }));
     });
     await page.waitForTimeout(1000);
-    const run = await page.evaluate(() => ({ starts: window.__audioRuns.at(-1).starts, samples: window.__audioRuns.at(-1).samples }));
+    const run = await page.evaluate(() => ({ starts: window.__activeAudioRun().starts, samples: window.__activeAudioRun().samples }));
     const accelerated = run.starts.filter(start => start.rate === 1.5);
     assert.ok(accelerated.length > 2);
     for (let i = 1; i < accelerated.length; i++) {
@@ -139,7 +143,7 @@ try {
     }
     // A 180 Hz input should remain near 180 Hz, rather than rising to 270 Hz.
     const frequency = await page.evaluate(() => {
-      const run = window.__audioRuns.at(-1), analyser = run.analyser;
+      const run = window.__activeAudioRun(), analyser = run.analyser;
       analyser.fftSize = 4096;
       return new Promise(resolve => setTimeout(() => {
         const bins = new Float32Array(analyser.frequencyBinCount); analyser.getFloatFrequencyData(bins);
@@ -150,8 +154,8 @@ try {
     assert.ok(Math.abs(frequency - 180) < 20, `Pitch changed to ${frequency} Hz`);
   });
   await check('Document switch discards scheduled old speech', async () => {
-    const index = await page.evaluate(() => window.__audioRuns.length - 1);
-    await page.locator('.recent-document').filter({ hasText: 'The art of paying attention' }).click();
+    const index = await page.evaluate(() => window.__audioRuns.indexOf(window.__activeAudioRun()));
+    await menuClick(page.locator('.recent-document').filter({ hasText: 'The art of paying attention' }));
     await page.getByRole('heading', { name: 'The art of paying attention' }).waitFor();
     const previous = await page.evaluate(index => ({ state: window.__audioRuns[index].context.state, time: window.__audioRuns[index].context.currentTime, starts: window.__audioRuns[index].starts }), index);
     assert.equal(previous.state, 'closed');

@@ -26,14 +26,15 @@ export function contextSplit(text) {
 
 export function normalizeSpeechText(text) {
   const normalized = text
+    .replace(/\b([a-zA-Z]{2,})-([ \t]*\n[ \t]*|[ \t]+)([a-z]{2,})\b/g, (_, left, gap, right) => {
+      const compound = /^(?:well|long|short|self|high|low|part|full|half|real|one|two|three|state|of|the|non|cross|cost|time|user|customer)$/i.test(left);
+      return left + (!compound && (gap.includes('\n') || /^(?:cation|tion|sion|ment|ness|ity|ation|ture|ance|ence)$/.test(right)) ? '' : '-') + right;
+    })
     .replace(/(?<![.!?:;…—–\-\s])[ \t]*\n+\s*/g, '. ')
     .replace(/\s*\n+\s*/g, ' ')
-    .replace(/(?<=\b[a-zA-Z]{2,})-\s+(?=[a-z]{2,}\b)/g, '')
     .replace(/\s*(?:→|->|=>|⟶|⇒)\s*/g, ', ')
-    .replace(/₹\s*(\d+(?:,\d+)*(?:\.\d+)?(?:\s*(?:lakh|lakhs|crore|crores|thousand|million|billion))?)\b/gi, '$1 rupees')
-    .replace(/\b1 rupees\b/gi, '1 rupee')
-    .replace(/€\s*(\d+(?:,\d+)*(?:\.\d+)?(?:\s*(?:thousand|million|billion))?)\b/gi, '$1 euros')
-    .replace(/\b1 euros\b/gi, '1 euro')
+    .replace(/₹\s*(\d+(?:,\d+)*(?:\.\d+)?(?:\s*(?:lakh|lakhs|crore|crores|thousand|million|billion))?)\b/gi, (_, amount) => `${amount} ${Number(amount.replace(/,/g, '')) === 1 ? 'rupee' : 'rupees'}`)
+    .replace(/€\s*(\d+(?:,\d+)*(?:\.\d+)?(?:\s*(?:thousand|million|billion))?)\b/gi, (_, amount) => `${amount} ${Number(amount.replace(/,/g, '')) === 1 ? 'euro' : 'euros'}`)
     .replace(/(?<=\d)\s*–\s*(?=\d)/g, ' to ')
     .replace(/\s+–\s+/g, ' — ')
     .replace(/^[\s•●◦▪▸▹]+/u, '')
@@ -49,6 +50,11 @@ function trimPadding(audio, side) {
   if (at < 0 || at >= samples.length) return samples;
   return side === 'start' ? samples.subarray(Math.max(0, at - margin)) : samples.subarray(0, Math.min(samples.length, at + margin + 1));
 }
+function silence(samples, side) {
+  let count = 0;
+  while (count < samples.length && Math.abs(samples[side === 'start' ? count : samples.length - count - 1]) < .0005) count++;
+  return count;
+}
 
 function paceAudio(audio, rawText) {
   const rate = audio?.sampling_rate, samples = audio?.audio;
@@ -63,20 +69,17 @@ function paceAudio(audio, rawText) {
   while (first < last && rmsAt(first) < .004) first += block;
   if (first >= last) return audio;
   while (last > first && rmsAt(Math.max(first, last - block)) < .004) last -= block;
-  const hasHeadingBreak = /\n\s*\n/.test(rawText);
-  const hasInternalPunct = hasHeadingBreak || /[,;:—–.!?]\s+\S/.test(rawText.trim());
+  const hasInternalPunct = /[,;:—–.!?]\s+\S/.test(rawText.trim());
   const inserts = [];
   if (hasInternalPunct) {
-    let run = 0, valleyStart = first, usedHeadingBreak = false;
-    const minBlocks = hasHeadingBreak ? 15 : 20;
+    let run = 0, valleyStart = first;
+    const minBlocks = 20;
     for (let pos = first; pos < last; pos += block) {
       if (rmsAt(pos) < .0035) { if (!run) valleyStart = pos; run++; }
       else {
         if (run >= minBlocks) {
           const currentSec = (run * block) / rate;
-          const addSec = hasHeadingBreak && !usedHeadingBreak ? Math.max(0, .58 - currentSec)
-            : (run >= 20 && currentSec < .46 ? Math.min(.09, .46 - currentSec) : 0);
-          if (hasHeadingBreak && !usedHeadingBreak) usedHeadingBreak = true;
+          const addSec = currentSec < .46 ? Math.min(.09, .46 - currentSec) : 0;
           if (addSec > .01) inserts.push({ at: valleyStart + Math.floor((run * block) / 2), count: Math.round(rate * addSec) });
         }
         run = 0;
@@ -101,6 +104,22 @@ function paceAudio(audio, rawText) {
 
 export async function generateComplete(tts, text, options, checkCancelled = () => {}) {
   checkCancelled();
+  const blocks = text.split(/\n\s*\n/).map(part => part.trim()).filter(Boolean);
+  if (blocks.length > 1) {
+    // Synthesize known source boundaries separately; a quiet valley does not locate a heading.
+    let result = await generateComplete(tts, blocks[0], options, checkCancelled);
+    for (let i = 1; i < blocks.length; i++) {
+      checkCancelled();
+      const next = await generateComplete(tts, blocks[i], options, checkCancelled);
+      const left = trimPadding(result, 'end'), right = trimPadding(next, 'start');
+      const pause = /[.!?…]["'”’\])]*$/.test(blocks[i - 1]) ? .64 : .74;
+      const padding = Math.max(0, Math.round(result.sampling_rate * pause) - silence(left, 'end') - silence(right, 'start'));
+      const audio = new Float32Array(left.length + padding + right.length);
+      audio.set(left); audio.set(right, audio.length - right.length);
+      result = { audio, sampling_rate: result.sampling_rate };
+    }
+    return result;
+  }
   try { return paceAudio(await tts.generate(normalizeSpeechText(text), options), text); }
   catch (error) {
     if (error.code !== 'VOICE_CONTEXT' || text.length < 2) throw error;

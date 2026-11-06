@@ -1,3 +1,4 @@
+import { menuClick } from './reader-qa-helpers.mjs';
 import { createRequire } from 'node:module';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -74,7 +75,7 @@ try {
     await jump(4);
     await page.getByRole('button', { name: 'Reading view', exact: true }).click();
     await page.waitForFunction(() => document.querySelector('.viewing-location')?.dataset.location === 'page-4');
-    await page.getByRole('button', { name: 'Original PDF', exact: true }).click();
+    await page.getByRole('button', { name: 'Document view', exact: true }).click();
     await page.getByText('Page 4 of 5', { exact: true }).waitFor();
     await page.getByRole('button', { name: 'Reading view', exact: true }).click();
   });
@@ -118,17 +119,20 @@ try {
     }));
     await page.reload();
     await page.getByRole('heading', { name: 'Navigation', exact: true }).waitFor();
+    await jump(1); // Restart preserves the browsed page rather than returning to page one.
     await page.locator('.original-page-marker').filter({ hasText: 'Page i · PDF 1' }).waitFor();
     assert.equal(await page.locator('.reading-page-section').count(), 5);
   });
   await check('Word and text documents have section navigation without false page numbers', async () => {
-    await page.getByLabel('Paste text', { exact: true }).click();
+    await menuClick(page.getByLabel('Paste text', { exact: true }));
     await page.getByLabel('Document title', { exact: true }).fill('Section navigation');
     await page.getByLabel('Your text', { exact: true }).fill('Introduction\n\nA good story takes you somewhere new.\n\nA different chapter\n\nThe second section is easy to find.');
     await page.getByRole('button', { name: 'Add to my library' }).click();
     await showNavigation();
+    await page.getByRole('button', { name: 'Sections', exact: true }).click();
     assert.equal(await page.locator('.navigation-entry').count(), 2);
     await page.getByLabel('Browse section 2', { exact: true }).click();
+    await page.waitForFunction(() => document.querySelector('.viewing-location')?.dataset.location === 'section-2' && document.querySelector('[aria-label="Go to section"]')?.value === '2');
     assert.equal(await page.getByLabel('Go to section', { exact: true }).inputValue(), '2');
     assert.equal(await page.getByLabel('Go to original page', { exact: true }).count(), 0);
   });

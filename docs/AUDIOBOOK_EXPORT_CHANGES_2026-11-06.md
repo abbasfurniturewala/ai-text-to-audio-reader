@@ -1,0 +1,50 @@
+# Offline audiobook export upgrade — 6 November 2026
+
+The user approved local GPU export, resumable chaptered M4B jobs, Qwen 0.6B comparison, portable Python/CUDA/FFmpeg tools and model downloads. This continues the existing desktop app in place. After validation they separately approved installation: the tested build is now in `release/win-unpacked`, with the previous build retained at `release/previous-build-20261106-180555`. Cadence reopened with the existing book and idle audio; installed/backup/helper/fp32 hashes were verified. Delivery details are in `docs/HANDOFF.md`.
+
+## Result
+
+Export audio defaults to one M4B audiobook with AAC audio and chapter markers, using the document's existing PDF/EPUB hierarchy. Nested chapter titles become breadcrumbs because M4B chapter lists are flat. The range can be the entire document or the remaining passages. The existing WAV export remains available under Audio format, including its existing two-hour memory guard.
+
+GPU Kokoro uses the original fp32 ONNX weights, tokenizer, voice files, blends, complete-sentence planner, PDF margin exclusions, normalization and pause bounds. CPU Kokoro is a fallback choice. All export inference runs in isolated Python processes; Electron's export worker owns planning/disk progress, not another native Node inference session. Everyday reader narration keeps its existing backend and remains independent of export and browsing. The export worker communicates only small progress records to the renderer and retains at most the current/next speech chunk instead of the complete audio book.
+
+Completed 24kHz/16-bit PCM phrases are flushed to the private job directory before an atomic checkpoint is committed. Pause or normal app closure retains progress; restart rebuilds text metadata and resumes after the last committed phrase, truncating only an uncommitted tail in the job's own file. Model/pipeline identities and source/settings fingerprints prevent mixing changed voices or models into an old job. Helper/encoding failures retain completed audio. A finished-file checksum also recovers the interruption window after publication but before the final checkpoint.
+
+FFmpeg produces and verifies AAC codec, duration and chapter count before publication. Existing output files are protected. Cross-drive output is copied to a job-owned adjacent partial file, then published with a non-replacing same-volume operation, so a half-written copy is not presented as the finished audiobook. Successful jobs release their PCM/source working files and retain a small completion record. No existing library records or migrations changed.
+
+**Menu → Audio exports** reopens progress and paused jobs even after closing the book. **Continue reading** closes the panel while a job continues. The comparison panel uses the same short passage for GPU Kokoro, CPU Kokoro and Qwen; it shows actual generation/model-load time and audio length. Samples start paused and play only on request. Stopping a comparison cancels its local work and releases its model. One export model runs at a time.
+
+## Measured speed on this PC
+
+RTX 2070 SUPER (8GiB, Turing), driver 610.88; Windows x64. The matching benchmark has 198 words, 1,232 characters and 15 complete speech units. All inference is local/offline and the Kokoro model checksum remains `8fbea51ea711f2af382e88c833d9e288c6dc82ce5e98421ea61c058ce21a34cb`.
+
+| Path | Audio produced | Creation/generation time | Throughput | Short-sample projection per audio hour |
+|---|---:|---:|---:|---:|
+| Installed CPU WAV export, Heart, uncached | 77.180875s | 24.151s create (23.492s inference) | 3.20× | 18.77min |
+| GPU Kokoro, Heart, uncached | 77.180875s | 7.165s generation/planning/conversion | 10.77× | 5.57min |
+| GPU Qwen 0.6B, Aiden, full precision | 81.589083s | 195.016s generation/planning/conversion | 0.418× | 143.41min |
+
+GPU Kokoro's measured generation path is about **3.37× faster** than the installed uncached CPU export creation path, or 3.28× compared with CPU inference alone. GPU model loading adds **12.9s** in this run; Qwen adds **13.2s**. This is worthwhile for long books, but model loading can outweigh the advantage on a tiny export. FFmpeg encoding/publication is additional: the real ~25.08s fixture took 0.6–0.9s to finish. A 125-minute synthetic-silence duration fixture encoded/published in ~5.5s; silence compresses unusually easily, so that is not a spoken-book encoding estimate. Ten hours of speech extrapolates to ~56 minutes of GPU synthesis versus ~3h08 CPU creation, plus loading/encoding, **not a completed ten-hour benchmark or timing guarantee**.
+
+CPU/GPU Kokoro waveform lengths match on the fixture, but floating-point providers are not bit-identical. Existing fp32 weights were neither quantized nor replaced. Qwen uses different voices, timing and pronunciation; generation tests establish finite non-silent speech, not a claim that its voice quality or pronunciation is superior. Listen to the comparisons before a full-book choice.
+
+## Runtime and compatibility
+
+Everything optional is below ignored `.cache/audiobook`, outside the live library: uv 0.13.7, portable CPython 3.12.16, separate ORT/Qwen environments, CUDA PyTorch 2.7.1, ONNX Runtime GPU 1.23.2 and FFmpeg 9.0 LGPL build. The Python requirements files pin resolved packages. uv/FFmpeg archives have fixed SHA256 checks; setup refuses changed downloads. The FFmpeg URL is an upstream rolling alias with a pinned digest: if upstream replaces that archive, a fresh future setup needs an explicitly reviewed URL/digest rather than bypassing verification. An idempotent `-SkipModels` setup rerun passed without dependency changes or new model downloads.
+
+Qwen is official `Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`, pinned revision `85e237c12c027371202489a0ec509ded67b5e4b5`; all 13 repository files total 2,498,388,392 bytes and were checksum verified. Generation uses a local path, offline flags, no implicit Hugging Face token and no API key. No global Python, graphics driver, registry install, npm dependency/lock downgrade or reader-model change was needed. The portable runtime stays beside this workspace; it is not embedded again in every staged app backup.
+
+The RTX 2070 SUPER cannot use the common BF16/FlashAttention-2 example as-is. FP16/SDPA loaded but failed on first Qwen generation with a CUDA device assertion, with a traceback in code-predictor sampling. Full FP32/SDPA generated all 15 units successfully. It uses materially more VRAM and is slower than real time on this card. Overall GPU memory readings during Qwen reached about 6.2GiB including desktop/other processes; this was an observation, not a precisely isolated peak allocation. Qwen is a quality-comparison option; GPU Kokoro is the speed default.
+
+Staged lifecycle testing also reproduced a native Electron failure after comparing CPU/Qwen voices, exporting EPUB, then opening a PDF and starting another export. The captured fatal error was `v8::HandleScope::CreateHandle() Cannot create a handle without a HandleScope`, with `onnxruntime-node/dist/backend.js:48` in native inference. The initial implementation had a second Node ONNX session in the export worker as well as the reader's existing session. CPU export was therefore moved to the same process-isolation approach as GPU export, removing that second native Node session from Electron. It still uses the original fp32 weights and four CPU inference threads. The failed test logs are retained; final staged lifecycle verification is recorded in the handoff.
+
+The fixed lifecycle sequence passed on two successive staged candidates. The final candidate additionally exported the complete two-chapter EPUB using **Qwen Ryan** (41.41s audio), verified its M4B and continued through simultaneous PDF narration/GPU export, pause, normal application restart and resume. Both final test process exits were normal (code 0), with no renderer errors or external book/audio requests. Qwen Aiden is covered by the matched benchmark and the three-model sample comparison. These are original synthetic fixtures, not the user's private books.
+
+## Tradeoffs and verification scope
+
+- Working disk replaces unbounded audio RAM: raw PCM is ~173MB/audio hour, with extra room for encoded output and a safety reserve. The UI estimates this before creation; the job checks available profile-drive space. Destination-drive errors preserve generated phrases. An unfinished GPU phrase may need regeneration after Pause. CPU fallback also uses an isolated helper, so an unfinished phrase can be cancelled safely. The older WAV path still finishes its current native phrase before stopping.
+- GPU export competes with games, video work and other GPU applications. One export GPU model is loaded at a time; everyday narration stays on its existing CPU path. A short source GUI test while real narration and export ran together recorded max 16.8ms frame spacing and no >50ms frames; that is scoped evidence, not an all-load smoothness guarantee.
+- AAC M4B is compact and lossy; WAV remains the uncompressed option. A whole long book was not synthesized for acceptance. The final native pipeline did create/probe a **125-minute** file past the old two-hour cap, with three valid chapter markers, ~24MB peak JS heap and ~116MB Node process RSS. The isolated model processes are separate from this audio-streaming memory measurement; it is not total app/model memory or a VRAM claim.
+- Only English preset Qwen voices Aiden/Ryan are exposed. No cloud model, voice cloning, custom CUDA attention kernels, multi-GPU scheduling or new live-library synchronization was added. This remains a snapshot migration; OneDrive does not synchronize `%APPDATA%\Cadence`.
+
+Reproducible tools: `scripts/audiobook-benchmark.mjs`, `scripts/audiobook-native-qa.mjs`, `scripts/audiobook-qa.mjs`, and `tests/audiobook.test.js`. Reports/samples/profile data live in ignored `test-results/audiobook/`; all QA is isolated from the live library. Final candidate hashes, suite counts and delivery status are recorded in `docs/HANDOFF.md`.

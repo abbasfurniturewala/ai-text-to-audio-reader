@@ -1,13 +1,16 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from 'react';
-import { Bookmark, FileText, Volume2 } from 'lucide-react';
-import WordText from './WordText';
+import { FileText } from 'lucide-react';
+import ReadingPassage from './ReadingPassage';
+import { observeReader } from './readerVisibility';
 import type { Segment } from './types';
 import type { DocumentLocation } from './locations';
+import type { SpeechPart } from './speechPlan';
 
 interface Props {
   location: DocumentLocation; segments: Segment[]; pdf: boolean; count: number;
   position: number; bookmarks: number[]; search: string; disabled: boolean;
-  force: boolean; fontSize: number; fontTheme: string;
+  force: boolean; target?: number; fontSize: number; fontTheme: string;
+  spokenParts?: SpeechPart[];
   activeRef: RefObject<HTMLButtonElement | null>;
   onRead(index: number, character: number): void;
   onOriginal(page: number): void;
@@ -16,7 +19,7 @@ interface Props {
 /** Keep the page landmarks, but mount words only around the viewport (plus the
  * audio/jump target). Measured placeholders keep scrolling stable on eviction. */
 export default memo(function ReadingSection(props: Props) {
-  const { location, segments, pdf, count, position, bookmarks, search, disabled, force, fontSize, fontTheme, activeRef, onRead, onOriginal } = props;
+  const { location, segments, pdf, count, position, bookmarks, search, disabled, force, target, fontSize, fontTheme, spokenParts, activeRef, onRead, onOriginal } = props;
   const section = useRef<HTMLElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [nearby, setNearby] = useState(location.number === 1);
@@ -28,9 +31,7 @@ export default memo(function ReadingSection(props: Props) {
   useEffect(() => {
     const element = section.current;
     if (!element) return;
-    const observer = new IntersectionObserver(entries => setNearby(entries[0].isIntersecting), { root: element.closest('.reader-scroll'), rootMargin: '1200px 0px' });
-    observer.observe(element);
-    return () => observer.disconnect();
+    return observeReader(element, setNearby);
   }, [search]);
   useLayoutEffect(() => {
     if (!visible || !content.current) return;
@@ -49,15 +50,7 @@ export default memo(function ReadingSection(props: Props) {
     <div ref={content} className="section-content" style={visible ? undefined : { height: size.height || estimated }}>
       {visible && <>
         {location.start === location.end && <div className="unreadable-page"><FileText size={24} /><p>This page has no selectable text.</p><button className="text-button" onClick={() => onOriginal(location.page)}>View original page</button></div>}
-        {matching.map(({ segment, index }) => <button ref={index === position ? activeRef : undefined} key={index} data-passage-index={index} className={`passage ${segment.heading ? 'passage-heading' : ''} ${index === position ? 'current-passage' : ''}`} disabled={disabled} onClick={event => {
-          if (window.getSelection()?.toString()) return;
-          const word = (event.target as HTMLElement).closest<HTMLElement>('[data-word-start]');
-          onRead(index, Number(word?.dataset.wordStart) || 0);
-        }} aria-label={`Read from passage ${index + 1}: ${segment.text.slice(0, 75)}`} aria-current={index === position ? 'true' : undefined}>
-          {index === position && <span className="passage-indicator"><Volume2 size={15} /></span>}
-          <WordText text={segment.text} search={search} />
-          {bookmarks.includes(index) && <Bookmark className="passage-bookmark" size={12} fill="currentColor" />}
-        </button>)}
+        {matching.map(({ segment, index }) => <ReadingPassage key={index} segment={segment} index={index} current={index === position} target={index === target} bookmarked={bookmarks.includes(index)} search={search} disabled={disabled} spokenStart={spokenParts?.find(part => part.segment === index)?.start} spokenEnd={spokenParts?.filter(part => part.segment === index).at(-1)?.end} activeRef={activeRef} onRead={onRead} />)}
       </>}
     </div>
   </section>;

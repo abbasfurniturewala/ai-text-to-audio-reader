@@ -46,10 +46,10 @@ export function lastReaderBook(storage: Storage, ids: string[]) {
 /** Validate old checkpoints against today's page and paragraph boundaries. */
 export function resolveReadingCheckpoint(doc: ReaderDocument, locations: DocumentLocation[], saved?: ReadingCheckpoint): ReadingCheckpoint {
   const audio = Math.max(0, Math.min(doc.segments.length - 1, doc.position));
-  const original = doc.kind === 'PDF' && !!saved?.original;
+  const original = !!saved?.original;
   const page = doc.kind === 'PDF' ? Math.max(1, Math.min(doc.pageCount, saved?.page || doc.segments[audio]?.page || 1)) : 1;
   const segment = saved?.segment ?? (saved ? undefined : audio);
   const location = doc.kind === 'PDF' ? locations.find(item => item.page === page) : locations.find(item => (segment ?? audio) >= item.start && (segment ?? audio) < item.end) || locations[0];
   const target = segment !== undefined && location && segment >= location.start && segment < location.end ? segment : location && location.start < location.end ? location.start : undefined;
-  return { page, original, ...(!original && target !== undefined ? { segment: target } : {}) };
+  return { page, original, ...(!(original && doc.kind === 'PDF') && target !== undefined ? { segment: target } : {}) };
 }

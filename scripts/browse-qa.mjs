@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { clickReaderWord, dispatchReaderWord } from './reader-qa-helpers.mjs';
 const require = createRequire(import.meta.url);
 const { _electron } = require('playwright');
 const version = JSON.parse(await readFile('package.json', 'utf8')).version;
@@ -92,9 +93,7 @@ try {
   });
   await check('Clicking a word farther down moves narration without pulling the view', async () => {
     await page.locator('[data-location-key="page-5"]').scrollIntoViewIfNeeded();
-    const target = page.locator('[data-passage-index="32"]').locator('.read-word').filter({ hasText: /^calm$/ });
-    await target.scrollIntoViewIfNeeded();
-    await target.click();
+    await clickReaderWord(page.locator('[data-passage-index="32"]'), 'calm');
     await page.getByLabel('Pause narration', { exact: true }).waitFor();
     assert.ok((await position()).startsWith('Read from passage 33:'));
     const top = await scrollTop(); await waitForProgress(await position());
@@ -104,9 +103,9 @@ try {
   await check('Original PDF page five stays open while audio continues on page one', async () => {
     await page.getByLabel('Go to original page', { exact: true }).fill('1');
     await page.getByLabel('Go to original page', { exact: true }).press('Enter');
-    await page.locator('[data-passage-index="0"] .read-word').first().evaluate(element => element.click());
+    await dispatchReaderWord(page.locator('[data-passage-index="0"]'));
     await page.getByLabel('Pause narration', { exact: true }).waitFor();
-    await page.getByRole('button', { name: 'Original PDF', exact: true }).click();
+    await page.getByRole('button', { name: 'Document view', exact: true }).click();
     await page.getByLabel('Go to original page', { exact: true }).fill('1');
     await page.getByLabel('Go to original page', { exact: true }).press('Enter');
     for (let i = 0; i < 4; i++) await page.getByLabel('Next PDF page', { exact: true }).click();

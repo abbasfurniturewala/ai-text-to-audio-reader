@@ -1,6 +1,7 @@
 import { createRequire } from 'node:module';
 import { writeFile, mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { clickReaderWord, menuClick } from './reader-qa-helpers.mjs';
 const require = createRequire(import.meta.url);
 const { _electron } = require('playwright');
 const baseline = process.argv.includes('--baseline');
@@ -24,7 +25,7 @@ try {
       catch (error) { item.error = error.message; throw error; }
     });
   });
-  await page.getByLabel('Paste text', { exact: true }).click();
+  await menuClick(page.getByLabel('Paste text', { exact: true }));
   await page.getByLabel('Document title', { exact: true }).fill('Latency measurement');
   await page.getByLabel('Your text', { exact: true }).fill('A good story stays with you. Take a breath, settle in, and let the words come to you.\n\nA cup of coffee cooling beside an open window. The sound of rain finding its way through the trees.\n\nThere is a particular kind of quiet that arrives when you stop trying to do everything at once.');
   await page.getByRole('button', { name: 'Add to my library' }).click();
@@ -33,17 +34,11 @@ try {
   // Instrument the actual audio clock, including model initialization and preparation.
   await page.evaluate(() => {
     window.__timing = { starts: [] };
-    const Native = window.AudioContext;
-    window.AudioContext = class extends Native {
-      constructor(options) {
-        super(options);
-        const create = this.createBufferSource.bind(this);
-        this.createBufferSource = () => {
-          const source = create(), original = source.start.bind(source);
-          source.start = (...args) => { window.__timing.starts.push({ wall: performance.now(), clock: this.currentTime, at: args[0], duration: args[2] }); return original(...args); };
-          return source;
-        };
-      }
+    const create = AudioContext.prototype.createBufferSource;
+    AudioContext.prototype.createBufferSource = function () {
+      const source = create.call(this), original = source.start.bind(source);
+      source.start = (...args) => { window.__timing.starts.push({ wall: performance.now(), clock: this.currentTime, at: args[0], duration: args[2] }); return original(...args); };
+      return source;
     };
     window.__timing.clicked = performance.now();
     document.querySelector('.play-button').click();
@@ -57,12 +52,16 @@ try {
   timing.maxScheduleGapMs = Math.round(Math.max(0, ...timing.starts.slice(1).map((clip, i) => (clip.at - timing.starts[i].at - timing.starts[i].duration) * 1000)));
   if (!baseline) {
     const warmIndex = timing.starts.length;
-    await page.evaluate(() => { window.__timing.warmClicked = performance.now(); document.querySelector('.read-word').click(); });
+    await page.locator('.passage').first().evaluate(element => element.addEventListener('click', () => { window.__timing.warmClicked = performance.now(); }, { once: true, capture: true }));
+    await clickReaderWord(page.locator('.passage').first());
     await page.waitForFunction(index => window.__timing.starts.length > index, warmIndex);
     timing.preparedStartMs = await page.evaluate(index => Math.round(window.__timing.starts[index].wall - window.__timing.warmClicked), warmIndex);
+    await page.mouse.move(8, 8);
     await page.getByLabel('Pause narration', { exact: true }).waitFor();
     const wordIndex = await page.evaluate(() => window.__timing.starts.length);
-    await page.evaluate(() => { window.__timing.wordClicked = performance.now(); [...document.querySelectorAll('.read-word')].find(word => word.textContent === 'breath').click(); });
+    const passage = page.locator('.passage').filter({ hasText: 'breath' }).first();
+    await passage.evaluate(element => element.addEventListener('click', () => { window.__timing.wordClicked = performance.now(); }, { once: true, capture: true }));
+    await clickReaderWord(passage, 'breath');
     await page.waitForFunction(index => window.__timing.starts.length > index, wordIndex);
     timing.uncachedWordStartMs = await page.evaluate(index => Math.round(window.__timing.starts[index].wall - window.__timing.wordClicked), wordIndex);
   }

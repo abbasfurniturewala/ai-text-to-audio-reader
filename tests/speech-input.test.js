@@ -40,8 +40,27 @@ describe('voice context safety', () => {
     const tts = { generate: async text => { requests.push(text); return { audio: new Float32Array(8), sampling_rate: 24000 }; } };
     await generateComplete(tts, 'Chapter one\n\nA small beginning.', {});
     await generateComplete(tts, 'Already punctuated.\n\nNext sentence.', {});
-    expect(requests).toEqual(['Chapter one. A small beginning.', 'Already punctuated. Next sentence.']);
+    expect(requests).toEqual(['Chapter one.', 'A small beginning.', 'Already punctuated.', 'Next sentence.']);
+    expect(normalizeSpeechText('Chapter one\n\nA small beginning.')).toBe('Chapter one. A small beginning.');
     expect(normalizeSpeechText('• discover online → shortlist → pay ₹1 lakh or €1 in 10–15 days – with specifi- cation'))
       .toBe('discover online, shortlist, pay 1 lakh rupees or 1 euro in 10 to 15 days — with specification.');
+  });
+  it('keeps real compound words and decimal currency units intact', () => {
+    expect(normalizeSpeechText('A well- known author has a long- term plan and a customer- focused team.')).toBe('A well-known author has a long-term plan and a customer-focused team.');
+    expect(normalizeSpeechText('A specifi-\ncation costs ₹1.1 or €1.1.')).toBe('A specification costs 1.1 rupees or 1.1 euros.');
+  });
+  it('places heading breathing room at the known boundary rather than at an earlier comma', async () => {
+    const rate = 24000, requests = [];
+    const tts = { generate: async text => {
+      requests.push(text); const audio = new Float32Array(rate); audio.fill(.1);
+      if (text.startsWith('A heading')) audio.fill(0, rate * .3, rate * .5);
+      return { audio, sampling_rate: rate };
+    } };
+    const result = await generateComplete(tts, 'A heading, with detail\n\nBody begins.', {});
+    expect(requests).toEqual(['A heading, with detail.', 'Body begins.']);
+    const runs = []; let run = 0;
+    for (const sample of result.audio) { if (sample === 0) run++; else if (run) { runs.push(run / rate); run = 0; } }
+    expect(runs[0]).toBeCloseTo(.29, 2);
+    expect(runs[1]).toBeCloseTo(.74, 2);
   });
 });

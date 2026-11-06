@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BufferedNarrator, speechBounds } from '../src/narration';
+import { SegmentQueue, type SegmentSource } from '../src/segmentSource';
+import { iterateSpeech } from '../src/speechPlan';
+import type { Segment } from '../src/types';
 
 function buffer(seconds = 2, sampleRate = 1000) {
   const samples = new Float32Array(seconds * sampleRate).fill(.1);
@@ -18,16 +21,16 @@ class Context {
   async suspend() { this.state = 'suspended'; }
   async close() { this.closed = true; }
 }
-function harness(count = 6, load = vi.fn(async () => buffer()), startupSeconds = 4) {
+function harness(count = 6, load = vi.fn(async () => buffer()), startupSeconds = 4, source?: SegmentSource, outputReady?: Promise<void>) {
   const context = new Context();
   const callbacks = { onState: vi.fn(), onPosition: vi.fn(), onProgress: vi.fn(), onBuffer: vi.fn(), onError: vi.fn() };
   const output = { input: {} as AudioNode, setSpeed: vi.fn(), dispose: vi.fn() };
   const player = new BufferedNarrator({
-    segments: Array.from({ length: count }, (_, index) => ({ text: `Passage ${index}`, page: 1 })),
+    segments: source || Array.from({ length: count }, (_, index) => ({ text: `Passage ${index}`, page: 1 })),
     request: { engine: 'local', voice: 'af_heart', model: 'eleven_multilingual_v2' },
     speed: 1, startupSeconds, ...callbacks, load,
     createContext: () => context as unknown as AudioContext,
-    createOutput: async () => output,
+    createOutput: async () => { if (outputReady) await outputReady; return output; },
   });
   return { context, callbacks, output, player, load };
 }
@@ -35,6 +38,66 @@ beforeEach(() => vi.useFakeTimers());
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
 
 describe('continuous narration queue', () => {
+  it('starts necessary speech generation in parallel with output setup without duplicate requests', async () => {
+    let ready!: () => void;
+    const gate = new Promise<void>(resolve => { ready = resolve; });
+    const { player, load, context, callbacks } = harness(1, vi.fn(async () => buffer()), 0, undefined, gate);
+    const starting = player.start(0); await vi.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledTimes(1); expect(context.nodes).toHaveLength(0);
+    expect(callbacks.onState).toHaveBeenLastCalledWith('loading');
+    ready(); await starting; await vi.advanceTimersByTimeAsync(0);
+    expect(context.nodes).toHaveLength(1); expect(load).toHaveBeenCalledTimes(1);
+    expect(callbacks.onState).toHaveBeenLastCalledWith('playing'); player.stop();
+  });
+  it('discards a parallel opening when cancelled before the output is ready', async () => {
+    let ready!: () => void;
+    const gate = new Promise<void>(resolve => { ready = resolve; });
+    const { player, context, callbacks, output } = harness(1, vi.fn(async () => buffer()), 0, undefined, gate);
+    const starting = player.start(0); await vi.advanceTimersByTimeAsync(0);
+    player.stop(); ready(); await starting; await vi.advanceTimersByTimeAsync(0);
+    expect(context.nodes).toHaveLength(0); expect(output.dispose).toHaveBeenCalledTimes(1);
+    expect(callbacks.onState).toHaveBeenLastCalledWith('idle'); expect(callbacks.onError).not.toHaveBeenCalled();
+  });
+  it('handles an early synthesis rejection after parallel output setup without an unhandled promise', async () => {
+    let ready!: () => void;
+    const gate = new Promise<void>(resolve => { ready = resolve; });
+    const { player, context, callbacks } = harness(1, vi.fn(async () => { throw new Error('Opening failed'); }), 0, undefined, gate);
+    const starting = player.start(0); await vi.advanceTimersByTimeAsync(0); ready(); await starting; await vi.advanceTimersByTimeAsync(0);
+    expect(context.nodes).toHaveLength(0); expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith('Opening failed');
+    expect(callbacks.onState).toHaveBeenLastCalledWith('idle');
+  });
+  it('streams a large plan within the existing audio and metadata bounds', async () => {
+    const source = new SegmentQueue(iterateSpeech(Array.from({ length: 10000 }, (_, index) => ({ text: `This is a complete separate speech unit for passage ${index}.`, page: index + 1 }))));
+    const { player, context, load, callbacks } = harness(0, vi.fn(async () => buffer(.2)), 12, source);
+    await player.start(0); await vi.advanceTimersByTimeAsync(0);
+    expect(load).toHaveBeenCalledTimes(12); expect(source.retained).toBe(13);
+    for (let index = 0; index < 100; index++) {
+      context.currentTime = .07 + index * .2; await vi.advanceTimersByTimeAsync(40);
+      expect(source.retained).toBeLessThanOrEqual(15);
+    }
+    expect(callbacks.onPosition).toHaveBeenLastCalledWith(99);
+    expect(source.get(0)).toBeUndefined(); expect(source.length).toBe(Infinity);
+    expect(load.mock.calls.length).toBeLessThanOrEqual(111);
+    expect(player.seekSeconds(-.1)).toBe(true); player.setSpeed(1.5);
+    expect(callbacks.onError).not.toHaveBeenCalled(); player.stop();
+  });
+  it('discovers EOF and completes when the final streamed phrase exceeds the reserve', async () => {
+    const source = new SegmentQueue(iterateSpeech([{ text: 'This final complete sentence is the entire book.', page: 1 }]));
+    const { player, context, callbacks, load } = harness(0, vi.fn(async () => buffer(30)), 8, source);
+    await player.start(0); await vi.advanceTimersByTimeAsync(0);
+    expect(source.length).toBe(1); expect(load).toHaveBeenCalledTimes(1); expect(context.nodes).toHaveLength(1);
+    context.currentTime = 30.4; await vi.advanceTimersByTimeAsync(40);
+    expect(player.completed).toBe(true); expect(callbacks.onPosition).toHaveBeenLastCalledWith(0);
+    expect(callbacks.onProgress).toHaveBeenLastCalledWith(1);
+  });
+  it('does not pull more streamed text after pending synthesis is cancelled', async () => {
+    const source = new SegmentQueue((function* (): Generator<Segment> { for (let index = 0; index < 100; index++) yield { text: `Pending unit ${index}`, page: 1 }; })());
+    let resolve!: (clip: AudioBuffer) => void;
+    const { player, context } = harness(0, vi.fn(() => new Promise<AudioBuffer>(r => { resolve = r; })), 0, source);
+    await player.start(0); expect(source.retained).toBe(1); player.stop();
+    resolve(buffer()); await vi.advanceTimersByTimeAsync(0);
+    expect(source.retained).toBe(1); expect(context.nodes).toHaveLength(0);
+  });
   it('quick start plays the first ready phrase without waiting for future generation', async () => {
     const resolvers: Array<(clip: AudioBuffer) => void> = [];
     const load = vi.fn(() => new Promise<AudioBuffer>(resolve => resolvers.push(resolve)));

@@ -1,0 +1,2 @@
+import { build } from 'esbuild';
+await build({ entryPoints: ['src/exportPlan.ts'], outfile: 'desktop/export-core.mjs', bundle: true, platform: 'node', format: 'esm', target: 'node22', plugins: [{ name: 'unused-worklet-url', setup(builder) { builder.onResolve({ filter: /\?url$/ }, args => ({ path: args.path, namespace: 'unused-url' })); builder.onLoad({ filter: /.*/, namespace: 'unused-url' }, () => ({ contents: 'export default "";' })); } }] });

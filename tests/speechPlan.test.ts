@@ -1,8 +1,54 @@
 import { describe, expect, it } from 'vitest';
-import { speechPlan, chunkPosition, wordStart } from '../src/speechPlan';
-import { mapPdfText } from '../src/pdfWords';
+import { speechPlan, chunkPosition, wordStart, iterateSpeech, documentSpeechSource, documentSpeechPlan } from '../src/speechPlan';
+import { mapPdfText, pdfSpeechRanges } from '../src/pdfWords';
+import { SegmentQueue } from '../src/segmentSource';
+import type { ReaderDocument, Segment } from '../src/types';
 
 describe('sentence planning', () => {
+  it('pulls opening speech without scanning a large book or exposing a mutable heading', () => {
+    let visited = 0;
+    const segments = Array.from({ length: 50000 }, (_, index) => ({ get text() { visited++; return `This complete sentence describes the story at passage ${index}.`; }, page: index + 1 }));
+    const source = new SegmentQueue(iterateSpeech(segments));
+    expect(source.length).toBe(Infinity);
+    expect(source.get(0)?.text).toBe('This complete sentence describes the story at passage 0.');
+    expect(visited).toBeLessThan(20); expect(source.retained).toBe(1);
+    const short = new SegmentQueue(iterateSpeech([{ text: 'Part I', page: 1, heading: true }, { text: 'A short opening.', page: 1 }, { text: 'A longer complete sentence makes the next unit distinct.', page: 1 }]));
+    const first = short.get(0)!, saved = structuredClone(first);
+    expect(first.text).toBe('Part I\n\nA short opening.');
+    expect(first.parts).toEqual([{ segment: 0, start: 0, end: 6, offset: 0 }, { segment: 1, start: 0, end: 16, offset: 8 }]);
+    short.get(2); expect(short.length).toBe(2); expect(first).toEqual(saved);
+  });
+  it('releases consumed metadata and discovers the exact end without retaining the book plan', () => {
+    const source = new SegmentQueue(iterateSpeech(Array.from({ length: 10000 }, (_, index) => ({ text: `This complete sentence is long enough to remain separate at ${index}.`, page: index + 1 }))));
+    for (let index = 0; index < 10000; index++) {
+      source.get(index + 12); source.release(index - 2);
+      expect(source.retained).toBeLessThanOrEqual(15);
+    }
+    expect(source.length).toBe(10000); expect(source.get(0)).toBeUndefined();
+    expect(source.get(9999)?.parts[0].segment).toBe(9999); expect(source.get(10000)).toBeUndefined();
+  });
+  it('keeps streamed PDF omissions, Unicode offsets and cross-page source ranges identical to export', () => {
+    const segments: Segment[] = [
+      { text: 'Before this point, don’t stop café readers and', page: 1, heading: false },
+      { text: '1', page: 1 }, { text: 'finish the complete sentence here. Dr. Davis follows with a different thought.', page: 2, heading: false },
+      { text: '2', page: 2 }, { text: 'Another ordinary body paragraph finishes the book.', page: 3, heading: false }, { text: '3', page: 3 },
+    ];
+    const doc: ReaderDocument = { id: 'streamed', title: 'Streamed', kind: 'PDF', segments, pageCount: 3, position: 0, bookmarks: [], created: 0, updated: 0 };
+    const at = segments[0].text.indexOf('café'), source = documentSpeechSource(doc, 0, at + 1), expected = documentSpeechPlan(doc, 0, at + 1), actual = [];
+    for (let index = 0; source.get(index); index++) actual.push(source.get(index));
+    expect(actual).toEqual(expected);
+    expect(actual[0]?.text).toBe('café readers and finish the complete sentence here.');
+    expect(actual[0]?.parts).toEqual([{ segment: 0, start: at, end: segments[0].text.length, offset: 0 }, { segment: 2, start: 0, end: 34, offset: 17 }]);
+    expect(source.length).toBe(expected.length);
+  });
+  it('keeps bounded prefixes final even when empty and omitted passages separate tiny headings', () => {
+    const segments = [{ text: 'I', page: 1, heading: true }, { text: '', page: 1 }, { text: 'HEADER', page: 1 }, { text: 'A small start.', page: 2 }, { text: 'The remaining sentence is long enough to become its own speech unit.', page: 2 }];
+    const plan = speechPlan(segments, 0, 0, Infinity, new Set([2]));
+    expect(speechPlan(segments, 0, 0, 1, new Set([2]))).toEqual([plan[0]]);
+    expect(plan[0].text).toBe('I\n\nA small start.');
+    expect(speechPlan(segments, 0, 0, 0)).toEqual([]);
+    expect(new SegmentQueue(iterateSpeech([], 0)).get(0)).toBeUndefined();
+  });
   it('prepares only the opening phrases while preserving the full plan prefix', () => {
     const segments = Array.from({ length: 1000 }, (_, index) => ({ text: `Chapter ${index}\nA little time to settle in. This is a longer sentence that continues the thought and explains the next idea.`, page: index + 1 }));
     const full = speechPlan(segments);
@@ -76,6 +122,23 @@ describe('sentence planning', () => {
 });
 
 describe('PDF word coordinates', () => {
+  it('highlights only the scheduled sentence suffix across split PDF runs and omitted margins', () => {
+    const text = 'Before this point, listen carefully. The next sentence stays clear.';
+    const segments = [{ text, page: 2 }];
+    const runs = ['RUNNING HEADER', 'Before this point, ', 'listen carefully. ', 'The next sentence stays clear.'];
+    const positions = mapPdfText(runs, segments, 2), parts = speechPlan(segments, 0, text.indexOf('listen'))[0].parts;
+    expect(positions.map(map => pdfSpeechRanges(map, parts))).toEqual([[], [], [{ start: 0, end: 17 }], []]);
+    const all = speechPlan(segments)[0].parts;
+    expect(pdfSpeechRanges(positions[1], all)).toEqual([{ start: 0, end: 18 }]);
+    expect(pdfSpeechRanges(positions[2], all)).toEqual([{ start: 0, end: 17 }]);
+  });
+  it('limits cross-page sentence highlighting to the mapped page without changing word mappings', () => {
+    const segments = [{ text: 'A longer sentence continues over the page and', page: 1 }, { text: 'finishes here. Another sentence follows on this page.', page: 2 }];
+    const parts = speechPlan(segments)[0].parts, map = mapPdfText([segments[1].text], segments, 2)[0];
+    expect(pdfSpeechRanges(map, parts)).toEqual([{ start: 0, end: 14 }]);
+    expect(pdfSpeechRanges(map, [])).toEqual([]);
+    expect(map[15]).toEqual({ index: 1, character: 15 });
+  });
   it('maps split runs and repeated words across passages to the right source word', () => {
     const segments = [{ text: 'Other page.', page: 1 }, { text: 'Read this story.', page: 2 }, { text: 'Read this again.', page: 2 }];
     const mapped = mapPdfText(['Read ', 'this story.', 'Read this again.'], segments, 2);

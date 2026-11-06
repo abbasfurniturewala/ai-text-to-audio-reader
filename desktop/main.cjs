@@ -1,20 +1,50 @@
-const { app, BrowserWindow, ipcMain, dialog, session } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, session, shell } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { Worker } = require('node:worker_threads');
+const { profileDirectory } = require('./profile-path.cjs');
 
 app.setName('Cadence');
-if (process.env.CADENCE_DATA_DIR) app.setPath('userData', process.env.CADENCE_DATA_DIR);
+// AppData is virtualized when launched by packaged hosts such as Codex.
+app.setPath('userData', profileDirectory(app.getPath('home'), process.env));
 const primaryInstance = app.requestSingleInstanceLock();
 if (!primaryInstance) app.quit();
 let window, speechWorker, sequence = 0, modelReady = false, readerFullScreen = false;
 const pending = new Map();
+let exportWorker, exportSequence = 0;
+const exportPending = new Map();
+function exportRuntimeRoot() {
+  if (!app.isPackaged) return path.join(__dirname, '../.cache/audiobook');
+  const candidates = ['../../..', '../../../..'].map(parent => path.resolve(process.resourcesPath, parent, '.cache/audiobook'));
+  return candidates.find(folder => require('node:fs').existsSync(path.join(folder, 'runtime.json'))) || candidates[0];
+}
+function exportRequest(action, input = {}) {
+  if (!exportWorker) {
+    exportWorker = new Worker(path.join(__dirname, 'audiobook-worker.mjs'), { workerData: {
+      root: path.join(app.getPath('userData'), 'audiobook-jobs'),
+      runtimeRoot: exportRuntimeRoot(),
+      modelRoot: app.isPackaged ? path.join(process.resourcesPath, 'models') : path.join(__dirname, '../.cache/models'),
+    } });
+    exportWorker.on('message', message => {
+      if (message.type) { if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('reader:export-progress', message); return; }
+      const promise = exportPending.get(message.id); if (!promise) return; exportPending.delete(message.id);
+      if (message.error) promise.reject(new Error(message.error)); else promise.resolve(message.result);
+    });
+    const failed = error => { for (const promise of exportPending.values()) promise.reject(error); exportPending.clear(); exportWorker = null; };
+    exportWorker.on('error', failed); exportWorker.on('exit', () => failed(new Error('The export engine stopped. Completed phrases are saved; reopen Audio exports to resume.')));
+  }
+  const id = ++exportSequence;
+  return new Promise((resolve, reject) => { exportPending.set(id, { resolve, reject }); exportWorker.postMessage({ id, action, ...input }); });
+}
 
 function assertSender(event) {
   if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame) throw new Error('Untrusted request.');
 }
 function handle(channel, listener) {
   ipcMain.handle(channel, async (event, ...args) => { assertSender(event); return listener(...args); });
+}
+function modelProgress(progress) {
+  if (window && !window.isDestroyed() && !window.webContents.isDestroyed()) window.webContents.send('reader:model-progress', progress);
 }
 function workerRequest(action, request = {}) {
   if (!speechWorker) {
@@ -23,12 +53,12 @@ function workerRequest(action, request = {}) {
       workerData: { cacheDir: bundled || path.join(__dirname, '../.cache/models'), offline: app.isPackaged || process.env.CADENCE_QA_OFFLINE === '1' },
     });
     speechWorker.on('message', message => {
-      if (message.type === 'progress') { window?.webContents.send('reader:model-progress', message.progress); return; }
+      if (message.type === 'progress') { modelProgress(message.progress); return; }
       const promise = pending.get(message.id);
       if (!promise) return;
       pending.delete(message.id);
       if (message.error) promise.reject(new Error(message.error));
-      else { if (message.ready) { modelReady = true; window?.webContents.send('reader:model-progress', { status: 'ready' }); } promise.resolve(message.result); }
+      else { if (message.ready) { modelReady = true; modelProgress({ status: 'ready' }); } promise.resolve(message.result); }
     });
     const fail = (error) => {
       for (const promise of pending.values()) promise.reject(error);
@@ -73,10 +103,30 @@ async function setup() {
     if (result.canceled || !result.filePath) return false;
     await fs.writeFile(result.filePath, bytes); return true;
   });
+  handle('reader:export-runtime', () => exportRequest('runtime'));
+  handle('reader:export-list', () => exportRequest('list'));
+  handle('reader:export-create', async request => {
+    if (!request?.document || typeof request.document.title !== 'string') throw new Error('Choose a document to export.');
+    const filename = request.document.title.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').slice(0, 100) || 'Cadence audiobook';
+    const result = await dialog.showSaveDialog(window, { defaultPath: `${filename}.m4b`, filters: [{ name: 'Chaptered audiobook', extensions: ['m4b'] }] });
+    if (result.canceled || !result.filePath) return null;
+    return exportRequest('create', { request, output: result.filePath });
+  });
+  handle('reader:export-control', (jobId, action) => {
+    if (typeof jobId !== 'string' || (jobId !== 'sample' && !/^[a-f0-9-]{36}$/.test(jobId)) || !['pause', 'resume'].includes(action) || (jobId === 'sample' && action !== 'pause')) throw new Error('Invalid export action.');
+    return exportRequest(action, { jobId });
+  });
+  handle('reader:export-sample', request => exportRequest('sample', { request }));
+  handle('reader:export-reveal', async jobId => {
+    const job = (await exportRequest('list')).find(item => item.id === jobId);
+    if (!job || job.status !== 'complete') throw new Error('Finish the audiobook before opening its folder.');
+    try { await fs.access(job.output); } catch { throw new Error('The audiobook file has moved or is no longer available. Its export history is kept here.'); }
+    shell.showItemInFolder(job.output);
+  });
   session.defaultSession.setPermissionRequestHandler((_, permission, callback) => callback(permission === 'mediaKeySystem'));
   // Load in parallel with the window and saved library, before Play is pressed.
   void workerRequest('load').catch(() => {});
-  window = new BrowserWindow({ width: 1480, height: 960, minWidth: 1000, minHeight: 700, backgroundColor: '#f6f5f1', show: !process.env.CADENCE_QA, icon: path.join(__dirname, 'icon.png'),
+  window = new BrowserWindow({ width: 1480, height: 960, minWidth: 1000, minHeight: 700, backgroundColor: '#edf1f6', show: !process.env.CADENCE_QA, icon: path.join(__dirname, 'icon.png'),
     title: 'Cadence', autoHideMenuBar: true,
     webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true, backgroundThrottling: false, offscreen: !!process.env.CADENCE_QA },
   });
@@ -117,4 +167,10 @@ app.on('second-instance', () => {
   if (!process.env.CADENCE_QA) { window.show(); window.focus(); }
 });
 if (primaryInstance) app.whenReady().then(setup);
-app.on('window-all-closed', () => { speechWorker?.terminate(); app.quit(); });
+app.on('window-all-closed', async () => {
+  await Promise.all([
+    exportWorker ? exportRequest('shutdown').catch(() => {}) : Promise.resolve(),
+    speechWorker ? new Promise(resolve => { speechWorker.once('exit', resolve); speechWorker.postMessage({ action: 'shutdown' }); }) : Promise.resolve(),
+  ]);
+  app.quit();
+});

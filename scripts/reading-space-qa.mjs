@@ -19,12 +19,13 @@ async function check(name, action) { await action(); checks.push(name); console.
 async function fullScreen(on) {
   await page.waitForFunction(on => document.querySelector('.app-shell').classList.contains('focus-mode') === on, on);
   assert.equal(await page.evaluate(() => window.cadence.fullScreen()), on);
+  await page.waitForTimeout(350); // Windows can still be finishing the native transition.
 }
 async function jump(number) {
   await page.getByLabel('Go to original page', { exact: true }).fill(String(number));
   await page.getByLabel('Go to original page', { exact: true }).press('Enter');
   await page.waitForFunction(number => document.querySelector('.viewing-location')?.dataset.location === `page-${number}`, number);
-  await page.locator(`[data-location-key="page-${number}"] .read-word`).first().waitFor();
+  await page.locator(`[data-location-key="page-${number}"] [data-reader-text]`).first().waitFor();
 }
 try {
   await app.evaluate(({ ipcMain, BrowserWindow }) => {
@@ -101,7 +102,7 @@ try {
     await page.locator('.player').waitFor({ state: 'visible' });
     assert.equal((await page.locator('.reader-scroll').boundingBox()).height, height);
     await page.locator('.player').getByRole('button', { name: 'Back 15 seconds', exact: true }).click();
-    await page.locator('.focus-controls').getByRole('button', { name: 'Bookmark current passage', exact: true }).focus();
+    await page.locator('.focus-controls').getByRole('button', { name: 'Bookmark viewed passage', exact: true }).focus();
     await page.keyboard.press('Tab');
     await page.locator('.player').waitFor({ state: 'visible' });
     assert.equal(await page.locator('.player-reveal').getAttribute('aria-expanded'), 'true');
@@ -124,14 +125,15 @@ try {
     assert.equal(await page.locator('.voice-panel').isVisible(), false);
     assert.equal(await page.locator('.document-navigation').isVisible(), true);
     await page.getByRole('button', { name: 'Close document navigation', exact: true }).click();
-    await rail.getByRole('button', { name: 'Switch to original PDF', exact: true }).click();
+    await rail.getByRole('button', { name: 'Switch to document view', exact: true }).click();
     await page.locator('.pdf-loading').waitFor({ state: 'hidden' });
-    assert.ok(await page.locator('.pdf-page canvas').isVisible());
+    assert.ok(await page.locator('.pdf-page-slot[data-current="true"] canvas').isVisible());
     assert.equal(await page.locator('.focus-page b').textContent(), '4');
   });
   await check('Escape restores the normal panels, and F11 enters and exits full screen', async () => {
     await page.keyboard.press('Escape'); await fullScreen(false);
-    assert.equal(await page.locator('.sidebar').isVisible(), true);
+    assert.equal(await page.locator('.sidebar').isVisible(), false);
+    assert.equal(await page.getByRole('button', { name: 'Menu', exact: true }).isVisible(), true);
     assert.equal(await page.locator('.voice-panel').isVisible(), true);
     assert.equal(await page.locator('.document-navigation').isVisible(), true);
     assert.equal(await page.locator('.player').isVisible(), true);
@@ -147,10 +149,10 @@ try {
     await page.screenshot({ path: 'test-results/reading-space-1024.png' });
   });
   await check('Changing panels preserves the visible point on an original PDF page', async () => {
-    await page.locator('.reader-scroll').evaluate(element => element.scrollTo({ top: 250, behavior: 'instant' }));
+    await page.locator('.pdf-page-slot[data-current="true"]').evaluate(element => { const scroller = element.closest('.reader-scroll'); scroller.scrollTo({ top: scroller.scrollTop + element.getBoundingClientRect().top - scroller.getBoundingClientRect().top + 250, behavior: 'instant' }); });
     const fraction = () => page.evaluate(() => {
       const viewport = document.querySelector('.reader-scroll').getBoundingClientRect();
-      const canvas = document.querySelector('.pdf-page canvas').getBoundingClientRect();
+      const canvas = document.querySelector('.pdf-page-slot[data-current="true"] canvas').getBoundingClientRect();
       return (viewport.top + 30 - canvas.top) / canvas.height;
     });
     const before = await fraction();

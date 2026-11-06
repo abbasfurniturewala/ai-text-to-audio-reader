@@ -52,20 +52,31 @@ export async function synthesize(request: SpeechRequest, options: { signal?: Abo
 export async function speechBuffer(audio: SpeechAudio, context: AudioContext): Promise<AudioBuffer> {
   if (audio.samples?.length) {
     const buffer = context.createBuffer(1, audio.samples.length, audio.sampleRate);
-    buffer.copyToChannel(new Float32Array(audio.samples), 0);
+    buffer.getChannelData(0).set(audio.samples);
     return buffer;
   }
   return context.decodeAudioData(new Uint8Array(audio.bytes).buffer);
 }
 export function wavBytes(samples: Float32Array, sampleRate: number): Uint8Array {
-  const bytes = new Uint8Array(44 + samples.length * 2);
+  return wavBytesFromInt16Chunks([pcm16(samples)], sampleRate);
+}
+export function pcm16(samples: Float32Array, start = 0, end = samples.length): Int16Array {
+  const result = new Int16Array(Math.max(0, end - start));
+  for (let i = 0; i < result.length; i++) { const s = Math.max(-1, Math.min(1, samples[start + i] || 0)); result[i] = s < 0 ? s * 32768 : s * 32767; }
+  return result;
+}
+export function wavBytesFromInt16Chunks(chunks: Int16Array[], sampleRate: number): Uint8Array {
+  const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+  if (!Number.isInteger(sampleRate) || sampleRate <= 0 || length * 2 > 0xffffffff - 36) throw new Error('This WAV file is too large or has an invalid sample rate.');
+  const bytes = new Uint8Array(44 + length * 2);
   const view = new DataView(bytes.buffer);
   const write = (offset: number, value: string) => { for (let i = 0; i < value.length; i++) view.setUint8(offset + i, value.charCodeAt(i)); };
   write(0, 'RIFF'); view.setUint32(4, bytes.length - 8, true); write(8, 'WAVE'); write(12, 'fmt ');
   view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
   view.setUint32(24, sampleRate, true); view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true); view.setUint16(34, 16, true); write(36, 'data'); view.setUint32(40, samples.length * 2, true);
-  for (let i = 0; i < samples.length; i++) { const s = Math.max(-1, Math.min(1, samples[i])); view.setInt16(44 + i * 2, s < 0 ? s * 32768 : s * 32767, true); }
+  view.setUint16(32, 2, true); view.setUint16(34, 16, true); write(36, 'data'); view.setUint32(40, length * 2, true);
+  let offset = 44;
+  for (const chunk of chunks) for (const sample of chunk) { view.setInt16(offset, sample, true); offset += 2; }
   return bytes;
 }
 export async function decodeSpeech(audio: SpeechAudio, context: AudioContext): Promise<Float32Array> {

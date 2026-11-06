@@ -13,13 +13,14 @@ interface Props {
 export const LocationControls = memo(function LocationControls({ locations, current, pdf, onNavigate, open, onToggle }: Props & { open: boolean; onToggle(): void }) {
   const index = Math.max(0, locations.findIndex(location => location.key === current));
   const [value, setValue] = useState(String(index + 1));
-  useEffect(() => setValue(String(index + 1)), [index, locations]);
+  const editing = useRef(false);
+  useEffect(() => { if (!editing.current) setValue(String(index + 1)); }, [index, locations]);
   return <div className="location-controls">
     <button className={`navigation-toggle ${open ? 'selected' : ''}`} aria-label="Document navigation" aria-expanded={open} aria-controls="document-navigation" onClick={onToggle}><List size={15} /><span>Navigate</span></button>
     <div className="location-jump">
       <button className="icon-button" aria-label={pdf ? 'Previous document page' : 'Previous section'} disabled={index === 0} onClick={() => onNavigate(locations[index - 1].key)}><ChevronLeft size={16} /></button>
-      <form onSubmit={event => { event.preventDefault(); const number = Number(value); if (Number.isInteger(number) && number >= 1 && number <= locations.length) onNavigate(locations[number - 1].key); }}>
-        <label>{pdf ? 'PDF page' : 'Section'} <input aria-label={pdf ? 'Go to original page' : 'Go to section'} type="number" min={1} max={locations.length} step={1} required value={value} onChange={event => setValue(event.target.value)} title="Enter a number and press Enter" /></label><span>of {locations.length}</span>
+      <form onSubmit={event => { event.preventDefault(); const number = Number(value); if (Number.isInteger(number) && number >= 1 && number <= locations.length) { editing.current = false; onNavigate(locations[number - 1].key); } }}>
+        <label>{pdf ? 'PDF page' : 'Section'} <input aria-label={pdf ? 'Go to original page' : 'Go to section'} type="number" min={1} max={locations.length} step={1} required value={value} onChange={event => { editing.current = true; setValue(event.target.value); }} onBlur={() => { editing.current = false; setValue(String(index + 1)); }} title="Enter a number and press Enter" /></label><span>of {locations.length}</span>
       </form>
       <button className="icon-button" aria-label={pdf ? 'Next document page' : 'Next section'} disabled={index >= locations.length - 1} onClick={() => onNavigate(locations[index + 1].key)}><ChevronRight size={16} /></button>
     </div>

@@ -1,3 +1,4 @@
+import { menuClick } from './reader-qa-helpers.mjs';
 import { createRequire } from 'node:module';
 import { mkdir, writeFile, readFile } from 'node:fs/promises';
 import path from 'node:path';
@@ -44,16 +45,16 @@ try {
   await page.getByRole('heading', { name: 'The art of paying attention' }).waitFor();
   await check('Desktop bridge available', async () => { assert.equal((await page.evaluate(() => window.cadence.status())).desktop, true); });
   await page.screenshot({ path: 'test-results/reader-desktop.png' });
-  await check('Eight local voices', async () => { assert.equal(await page.locator('.voice-option').count(), 8); });
+  await check('All 23 local voices and the original eight curated voices are available', async () => { assert.equal(await page.locator('.voice-option').count(), 23); await page.getByLabel('Filter voices').selectOption('Curated voices'); assert.equal(await page.locator('.voice-option').count(), 8); await page.getByLabel('Filter voices').selectOption('All voices'); });
   await check('Voice selection and filter', async () => {
     await page.locator('.voice-option').filter({ hasText: 'George' }).click();
     await page.locator('.selected-voice h3').filter({ hasText: 'George' }).waitFor();
-    await page.getByLabel('Filter voices').selectOption('British'); assert.equal(await page.locator('.voice-option').count(), 2);
+    await page.getByLabel('Filter voices').selectOption('British'); assert.equal(await page.locator('.voice-option').count(), 8);
     await page.getByLabel('Filter voices').selectOption('All voices');
     await page.locator('.voice-option').filter({ hasText: 'Heart' }).click();
   });
   await check('Paste text and saved library', async () => {
-    await page.getByLabel('Paste text', { exact: true }).click();
+    await menuClick(page.getByLabel('Paste text', { exact: true }));
     await page.getByLabel('Document title', { exact: true }).fill('A listening test');
     await page.getByLabel('Your text', { exact: true }).fill('A fresh start\n\nA good story stays with you. Settle in, take a breath, and let the words come to you.\n\nThis is our second paragraph, ready for a different voice.');
     await page.getByRole('button', { name: 'Add to my library' }).click();
@@ -61,8 +62,8 @@ try {
   });
   await check('Bookmark a passage', async () => {
     await page.locator('.passage').nth(1).click();
-    await page.getByLabel('Bookmark current passage', { exact: true }).click();
-    await page.getByRole('button', { name: /^Bookmarks/ }).click();
+    await page.getByLabel('Bookmark viewed passage', { exact: true }).click();
+    await menuClick(page.getByRole('button', { name: /^Bookmarks/ }));
     await page.locator('.bookmark-card').filter({ hasText: 'A listening test' }).click();
     assert.equal(await page.locator('.current-passage').textContent(), 'A good story stays with you. Settle in, take a breath, and let the words come to you.');
   });
@@ -76,14 +77,21 @@ try {
     assert.equal(await page.locator('.reading-paper.sans').count(), 1);
   });
   await check('Real local neural playback and pause', async () => {
+    await page.mouse.move(16, 16);
+    // Returning through a same-book bookmark now preserves the earlier word-start audio.
+    const activePlayback = page.getByLabel(/^(Pause narration|Cancel loading)$/);
+    if (await activePlayback.count()) await activePlayback.click();
     await page.getByLabel('Play narration', { exact: true }).click();
-    await page.getByLabel('Pause narration', { exact: true }).waitFor({ timeout: 180000 });
+    await page.getByLabel('Pause narration', { exact: true }).waitFor({ state: 'attached', timeout: 180000 });
+    await page.mouse.move(18, 18);
     await page.getByLabel('Pause narration', { exact: true }).click();
     await page.getByText('TAKE YOUR TIME', { exact: true }).waitFor();
     await page.getByLabel('Next passage', { exact: true }).click();
   });
   await check('Audio export generates a real WAV', async () => {
+    await page.mouse.move(17, 17);
     await page.getByRole('button', { name: 'Export audio', exact: true }).click();
+    await page.getByLabel('Audio format', { exact: true }).selectOption('wav');
     await page.getByRole('button', { name: 'Create audio file' }).click();
     await page.getByRole('button', { name: 'Save WAV', exact: true }).waitFor({ timeout: 240000 });
     const destination = path.resolve('test-results/exported-narration.wav');
@@ -99,9 +107,9 @@ try {
     await page.locator('input[type=file]').setInputFiles('test-results/fixtures/Adventure.pdf');
     await page.getByRole('heading', { name: 'Adventure', exact: true }).waitFor();
     await page.locator('.passage').filter({ hasText: 'This PDF can be read aloud' }).waitFor();
-    await page.getByRole('button', { name: 'Original PDF', exact: true }).click();
+    await page.getByRole('button', { name: 'Document view', exact: true }).click();
     await page.locator('.pdf-loading').waitFor({ state: 'detached' });
-    const width = await page.locator('.pdf-page canvas').evaluate(canvas => canvas.width); assert.ok(width > 600);
+    const width = await page.locator('.pdf-page-slot[data-current="true"] canvas').evaluate(canvas => canvas.width); assert.ok(width > 600);
     await page.screenshot({ path: 'test-results/pdf-reader.png' });
   });
   await check('DOCX import', async () => {
@@ -120,7 +128,7 @@ try {
     await page.getByRole('heading', { name: 'Quiet moments', exact: true }).waitFor();
   });
   await check('Settings and local model readiness', async () => {
-    await page.getByRole('button', { name: 'Settings', exact: true }).click();
+    await menuClick(page.getByRole('button', { name: 'Settings', exact: true }));
     await page.getByRole('button', { name: 'Local voices are ready', exact: true }).waitFor();
     assert.equal(await page.getByText('ElevenLabs').count(), 0);
     await page.getByLabel('Close dialog', { exact: true }).click();
@@ -139,18 +147,22 @@ try {
     await page.waitForTimeout(700);
     await page.reload();
     await page.getByRole('heading', { name: 'Quiet moments', exact: true }).waitFor();
-    await page.getByRole('button', { name: /^Bookmarks/ }).click();
+    await menuClick(page.getByRole('button', { name: /^Bookmarks/ }));
     assert.equal(await page.locator('.bookmark-card').count(), 1);
   });
-  await page.getByRole('button', { name: /^My library/ }).click();
+  await menuClick(page.getByRole('button', { name: /^My library/ }));
   await page.screenshot({ path: 'test-results/library-desktop.png' });
   await check('Layout at 1024 × 768', async () => {
     await app.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setContentSize(1024, 768));
-    await page.locator('.recent-document').first().click();
+    await menuClick(page.locator('.recent-document').first());
     await page.screenshot({ path: 'test-results/reader-compact.png' });
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     assert.equal(await page.getByLabel('Play narration', { exact: true }).isVisible(), true);
   });
   await check('No uncaught renderer exceptions', async () => assert.deepEqual(errors, []));
   await writeFile('test-results/desktop-results.json', JSON.stringify({ checks, errors }, null, 2));
+} catch (error) {
+  await page.screenshot({ path: 'test-results/desktop-failure.png' });
+  console.log('Player failure state:', await page.locator('.player-dock').evaluate(element => ({ classes: element.className, text: element.textContent, buttons: [...element.querySelectorAll('button')].map(button => ({ label: button.getAttribute('aria-label'), visible: button.checkVisibility() })) })));
+  throw error;
 } finally { await app.close(); }

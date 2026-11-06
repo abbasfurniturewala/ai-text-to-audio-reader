@@ -9,9 +9,9 @@
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "desktop": "node scripts/start-desktop.mjs",
-    "build": "tsc -b && vite build",
+    "build": "node scripts/build-export.mjs && tsc -b && vite build",
     "start": "electron .",
-    "test": "vitest run",
+    "test": "node scripts/build-export.mjs && vitest run",
     "test:integration": "node scripts/desktop-qa.mjs",
     "package": "npm run build && electron-builder --dir --win --x64",
     "package:portable": "npm run build && electron-builder --win portable --x64"
@@ -64,7 +64,8 @@
     "asarUnpack": [
       "node_modules/onnxruntime-node/**/*",
       "node_modules/sharp/**/*",
-      "node_modules/@img/**/*"
+      "node_modules/@img/**/*",
+      "desktop/*.py"
     ],
     "compression": "normal",
     "win": {

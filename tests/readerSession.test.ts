@@ -58,6 +58,16 @@ describe('small reading checkpoints', () => {
   it('uses the old audio location only when no browsing checkpoint exists', () => {
     expect(resolveReadingCheckpoint(doc, documentLocations(doc))).toEqual({ page: 3, segment: 1, original: false });
     const text = { ...doc, kind: 'TXT' as const, pageCount: 1, segments: doc.segments.map(segment => ({ ...segment, page: 1 })) };
-    expect(resolveReadingCheckpoint(text, documentLocations(text), { page: 9, segment: 2, original: true })).toEqual({ page: 1, segment: 2, original: false });
+    expect(resolveReadingCheckpoint(text, documentLocations(text), { page: 9, segment: 2, original: true })).toEqual({ page: 1, segment: 2, original: true });
+  });
+  it('restores document view and exact paragraphs for every reflowable format using the existing checkpoint', () => {
+    for (const kind of ['EPUB', 'DOCX', 'TXT', 'NOTE'] as const) {
+      const book = { ...doc, kind, pageCount: 1, segments: doc.segments.map(segment => ({ ...segment, page: 1 })) };
+      const storage = memory();
+      writeReadingCheckpoint(storage, book.id, { page: 1, segment: 2, original: true });
+      expect(resolveReadingCheckpoint(book, documentLocations(book), readReaderSession(storage).books[book.id])).toEqual({ page: 1, segment: 2, original: true });
+      expect(resolveReadingCheckpoint(book, documentLocations(book), { page: 1, segment: 999, original: true })).toEqual({ page: 1, segment: 0, original: true });
+      expect(book.position).toBe(1);
+    }
   });
 });
