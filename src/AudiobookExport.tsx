@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDownToLine, LoaderCircle, Play } from 'lucide-react';
+import { exportableChapters, filterDocumentByChapters } from './locations';
 import { availableVoices, findVoice } from './voices';
 import { exportActive, exportError, useExportJobs } from './useExportJobs';
 import type { ExportEngine, ExportRequest, ExportRuntime, ExportSample, ReaderDocument } from './types';
@@ -10,6 +11,11 @@ export default function AudiobookExport({ document: doc, voiceId, wav, wavBusy, 
   const [format, setFormat] = useState('m4b'), [runtime, setRuntime] = useState<ExportRuntime>();
   const [engine, setEngine] = useState<ExportEngine>('kokoro-cuda'), [voice, setVoice] = useState(voiceId);
   const [range, setRange] = useState('all'), [busy, setBusy] = useState(''), [error, setError] = useState(''), [samples, setSamples] = useState<Sample[]>([]);
+  const chapters = useMemo(() => exportableChapters(doc), [doc]);
+  const [selectedChapters, setSelectedChapters] = useState<Set<string>>(() => new Set(chapters.map(ch => ch.key)));
+  useEffect(() => { setSelectedChapters(new Set(chapters.map(ch => ch.key))); }, [doc?.id, chapters.length]);
+  const hasBackMatter = useMemo(() => chapters.some(ch => ch.backMatter), [chapters]);
+  const filteredDoc = useMemo(() => doc && range === 'chapters' && chapters.length > 1 ? filterDocumentByChapters(doc, selectedChapters, chapters) : doc, [doc, range, selectedChapters, chapters]);
   const { jobs, loading: jobsLoading, error: jobsError } = useExportJobs();
   const urls = useRef<string[]>([]), comparing = useRef(false), cancelled = useRef(false), mounted = useRef(true);
   useEffect(() => {
@@ -17,13 +23,14 @@ export default function AudiobookExport({ document: doc, voiceId, wav, wavBusy, 
     void window.cadence?.exportRuntime().then(result => { setRuntime(result); if (!result.kokoroGpu) setEngine('kokoro-cpu'); }).catch(reason => setError(exportError(reason)));
     return () => { mounted.current = false; urls.current.forEach(url => URL.revokeObjectURL(url)); if (comparing.current) void window.cadence?.controlExport('sample', 'pause').catch(() => {}); };
   }, []);
-  const words = useMemo(() => doc?.segments.slice(range === 'all' ? 0 : doc.position).reduce((sum, segment) => sum + segment.text.split(/\s+/).length, 0) || 0, [doc?.segments, doc?.position, range]);
+  const words = useMemo(() => filteredDoc?.segments.slice(range === 'remaining' ? doc?.position || 0 : 0).reduce((sum, segment) => sum + segment.text.split(/\s+/).length, 0) || 0, [filteredDoc?.segments, doc?.position, range]);
   const workingGb = words / 150 * 60 * 24000 * 2 * 1.8 / 1000000000 + .27;
   const running = jobsLoading || jobs.some(exportActive);
   const request = (): ExportRequest => {
-    if (!doc) throw new Error('Open a document to start a new export.');
-    const { id, title, kind, segments, pageCount, topics, pageLabels } = doc;
-    return { document: { id, title, kind, segments, pageCount, topics, pageLabels }, from: range === 'all' ? 0 : doc.position, engine, voice, voiceName: findVoice(voice)?.name || voice };
+    if (!filteredDoc) throw new Error('Open a document to start a new export.');
+    if (range === 'chapters' && !selectedChapters.size) throw new Error('Choose at least one chapter to export.');
+    const { id, title, kind, segments, pageCount, topics, pageLabels } = filteredDoc;
+    return { document: { id, title, kind, segments, pageCount, topics, pageLabels }, from: range === 'remaining' ? doc?.position || 0 : 0, engine, voice, voiceName: findVoice(voice)?.name || voice };
   };
   const perform = async (action: () => Promise<unknown>, label: string) => {
     setError(''); setBusy(label);
@@ -49,11 +56,15 @@ export default function AudiobookExport({ document: doc, voiceId, wav, wavBusy, 
           <label className="field-label">Export model<select aria-label="Export model" value={engine} disabled={!!busy} onChange={event => setEngine(event.target.value as ExportEngine)}><option value="kokoro-cuda" disabled={!runtime?.kokoroGpu}>Kokoro · NVIDIA GPU · faster</option><option value="kokoro-cpu">Kokoro · CPU</option></select></label>
           <label className="field-label">Export voice<select aria-label="Export voice" value={voice} disabled={!!busy} onChange={event => setVoice(event.target.value)}>{!availableVoices.some(item => item.id === voice) && <option value={voice}>{findVoice(voice)?.name || voice}</option>}{availableVoices.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select></label>
         </div>
-        <label className="field-label">What would you like to export?<select aria-label="Audiobook range" value={range} disabled={!!busy} onChange={event => setRange(event.target.value)}><option value="all">The entire document</option><option value="remaining">From my current passage to the end</option></select></label>
+        <label className="field-label">What would you like to export?<select aria-label="Audiobook range" value={range} disabled={!!busy} onChange={event => setRange(event.target.value)}><option value="all">The entire document</option><option value="remaining">From my current passage to the end</option>{chapters.length > 1 && <option value="chapters">Selected chapters or sections ({selectedChapters.size} of {chapters.length})</option>}</select></label>
+        {range === 'chapters' && chapters.length > 1 && <div className="export-chapters" role="group" aria-label="Chapters to export">
+          <div className="export-chapters-bar"><span>{selectedChapters.size} of {chapters.length} selected · {words.toLocaleString()} words</span><div><button type="button" className="text-button" onClick={() => setSelectedChapters(new Set(chapters.map(ch => ch.key)))}>Select all</button><button type="button" className="text-button" onClick={() => setSelectedChapters(new Set((hasBackMatter ? chapters.filter(ch => !ch.backMatter) : chapters.slice(0, -1)).map(ch => ch.key)))}>{hasBackMatter ? 'Exclude back matter' : 'Exclude last section'}</button></div></div>
+          <div className="export-chapters-list">{chapters.map(ch => { const checked = selectedChapters.has(ch.key); return <label key={ch.key} className="export-chapter-row"><input type="checkbox" checked={checked} onChange={() => setSelectedChapters(prev => { const next = new Set(prev); if (checked) next.delete(ch.key); else next.add(ch.key); return next; })} /><span><b>{ch.title}</b><small>Page {ch.page} · {ch.words.toLocaleString()} words{ch.backMatter ? ' · Back matter' : ''}</small></span></label>; })}</div>
+        </div>}
         <p className="field-hint">Chapters come from this document’s contents. Approx. {Math.max(.1, workingGb).toFixed(1)} GB of temporary disk space; removed after success. Final M4B is about 43 MB per audio hour. You can keep reading, pause the export, or close Cadence and resume later.</p>
         {runtime && !runtime.tools && <p className="export-error" role="status">Local audiobook tools are unavailable. Prepare the approved offline export runtime, or use WAV.</p>}
-        {jobs.some(exportActive) && <p className="field-hint">An export is already running. Pause it in Audio exports before starting another.</p>}
-        <div className="export-actions"><button className="secondary" disabled={!window.cadence || !!busy || running || !!jobsError || !runtime?.tools} onClick={() => void compare()}>{busy === 'sample' ? <LoaderCircle size={16} className="spin" /> : <Play size={15} />} Compare a passage</button>{busy === 'sample' && <button className="text-button" onClick={() => { cancelled.current = true; void window.cadence?.controlExport('sample', 'pause').catch(() => {}); }}>Stop comparison</button>}<button className="primary" disabled={!window.cadence || !!busy || running || !!jobsError || !runtime?.tools} onClick={() => { cancelled.current = false; void perform(async () => { const job = await window.cadence!.createExport(request()); if (job) onManage(); }, 'create'); }}><ArrowDownToLine size={16} /> Create M4B audiobook</button></div>
+        {jobs.some(exportActive) && <p className="field-hint">An export is currently running. Creating a new M4B will queue it to start automatically next.</p>}
+        <div className="export-actions"><button className="secondary" disabled={!window.cadence || !!busy || running || !!jobsError || !runtime?.tools || (range === 'chapters' && !selectedChapters.size)} onClick={() => void compare()}>{busy === 'sample' ? <LoaderCircle size={16} className="spin" /> : <Play size={15} />} Compare a passage</button>{busy === 'sample' && <button className="text-button" onClick={() => { cancelled.current = true; void window.cadence?.controlExport('sample', 'pause').catch(() => {}); }}>Stop comparison</button>}<button className="primary" disabled={!window.cadence || !!busy || jobsLoading || !!jobsError || !runtime?.tools || (range === 'chapters' && !selectedChapters.size)} onClick={() => { cancelled.current = false; void perform(async () => { const job = await window.cadence!.createExport(request()); if (job) onManage(); }, 'create'); }}><ArrowDownToLine size={16} /> Create M4B audiobook</button></div>
       </> : <p>Open a document to create a new audiobook. Your saved exports are below.</p>}
       {!!samples.length && <section className="export-samples" aria-label="Voice comparisons">{samples.map(sample => <div key={sample.url}><b>{sample.name}</b><span>{sample.generationMs / 1000 < 10 ? (sample.generationMs / 1000).toFixed(1) : Math.round(sample.generationMs / 1000)}s to create {Math.round(sample.audioSeconds)}s of audio · model load {(sample.loadMs / 1000).toFixed(1)}s</span><audio controls preload="metadata" src={sample.url} /><details><summary>Compared text</summary><p>{sample.text}</p></details></div>)}</section>}
       <div className="modal-footer"><button className="secondary" onClick={onClose}>{doc ? 'Continue reading' : 'Close'}</button><button className="text-button" onClick={onManage}>View audio exports{jobs.length ? ` (${jobs.length})` : ''}</button></div>

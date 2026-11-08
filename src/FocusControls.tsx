@@ -1,4 +1,4 @@
-import { AudioLines, BookOpen, Bookmark, ChevronLeft, ChevronRight, FileText, Headphones, Highlighter, List, LoaderCircle, LocateFixed, Minimize2, Pause, Play, Search, Underline } from 'lucide-react';
+import { AudioLines, BookOpen, Bookmark, ChevronLeft, ChevronRight, FileText, Headphones, Highlighter, List, LoaderCircle, LocateFixed, Minimize2, Moon, Pause, Play, Search, Underline } from 'lucide-react';
 
 interface Props {
   playing: boolean; busy: boolean; disabled: boolean;
@@ -6,6 +6,7 @@ interface Props {
   speed: number; voiceOpen: boolean; navigationOpen: boolean; bookmarked: boolean;
   speechCue: 'highlight' | 'underline'; onSpeechCue(cue: 'highlight' | 'underline'): void;
   pdfZoom: number; onPdfZoom(zoom: number): void; canBookmark: boolean;
+  pdfNight?: boolean; onPdfNight?(): void;
   searchOpen: boolean; onSearch(): void;
   followAudio: boolean; onFollow(): void;
   onExit(): void; onToggle(): void; onSkip(seconds: number): void;
@@ -30,6 +31,7 @@ export default function FocusControls(props: Props) {
     <button className="icon-button" aria-label={props.original ? 'Switch to reading view' : 'Switch to document view'} title={props.original ? 'Reading view' : 'Document view'} onClick={props.onOriginal}>{props.original ? <BookOpen size={17} /> : <FileText size={17} />}</button>
     <button className="icon-button" aria-label="Search document" aria-expanded={props.searchOpen} title="Search document" onClick={props.onSearch}><Search size={17} /></button>
     {props.pdf && props.original && <label className="focus-speed" title="PDF zoom"><select aria-label="PDF zoom" value={props.pdfZoom} onChange={event => props.onPdfZoom(Number(event.target.value))}>{[.5,.75,1,1.25,1.5,1.75,2].map(value => <option key={value} value={value}>{value === 1 ? 'Fit' : `${Math.round(value * 100)}%`}</option>)}</select></label>}
+    {props.pdf && props.original && props.onPdfNight && <button className={`icon-button ${props.pdfNight ? 'following' : ''}`} aria-label="Night PDF page" aria-pressed={props.pdfNight} title={props.pdfNight ? 'Original PDF page' : 'Night PDF page'} onClick={props.onPdfNight}><Moon size={17} /></button>}
     <button className="icon-button" aria-label={`Speech cue: ${props.speechCue}; switch to ${props.speechCue === 'highlight' ? 'underline' : 'highlight'}`} title={`Speech cue: ${props.speechCue === 'highlight' ? 'Highlight' : 'Underline'}`} onClick={() => props.onSpeechCue(props.speechCue === 'highlight' ? 'underline' : 'highlight')}>{props.speechCue === 'highlight' ? <Highlighter size={17} /> : <Underline size={17} />}</button>
     <button className={`icon-button ${props.bookmarked ? 'is-bookmarked' : ''}`} aria-label={props.bookmarked ? 'Remove bookmark' : 'Bookmark viewed passage'} title="Bookmark the viewed passage" disabled={!props.canBookmark} onClick={props.onBookmark}><Bookmark size={17} fill={props.bookmarked ? 'currentColor' : 'none'} /></button>
   </aside>;

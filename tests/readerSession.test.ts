@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { lastReaderBook, readReaderSession, READER_SESSION_KEY, removeReadingCheckpoint, resolveReadingCheckpoint, writeReadingCheckpoint } from '../src/readerSession';
+import { formatBookmarksMarkdown, lastReaderBook, readBookmarkNotes, readBookPreference, readReaderSession, READER_SESSION_KEY, removeReadingCheckpoint, resolveReadingCheckpoint, writeBookmarkNote, writeBookPreference, writeReadingCheckpoint } from '../src/readerSession';
 import { documentLocations } from '../src/locations';
 import type { ReaderDocument } from '../src/types';
 function memory() {
@@ -69,5 +69,32 @@ describe('small reading checkpoints', () => {
       expect(resolveReadingCheckpoint(book, documentLocations(book), { page: 1, segment: 999, original: true })).toEqual({ page: 1, segment: 0, original: true });
       expect(book.position).toBe(1);
     }
+  });
+  it('stores and cleans up per-book narrator and speed preferences', () => {
+    const storage = memory();
+    writeBookPreference(storage, 'book-1', { voice: 'bm_george', speed: 1.25 });
+    writeBookPreference(storage, 'book-2', { voice: 'af_heart', speed: 0.95 });
+    expect(readBookPreference(storage, 'book-1')).toEqual({ voice: 'bm_george', speed: 1.25 });
+    expect(readBookPreference(storage, 'book-2')).toEqual({ voice: 'af_heart', speed: 0.95 });
+    removeReadingCheckpoint(storage, 'book-1');
+    expect(readBookPreference(storage, 'book-1')).toBeUndefined();
+    expect(readBookPreference(storage, 'book-2')).toEqual({ voice: 'af_heart', speed: 0.95 });
+  });
+  it('stores bookmark notes, formats Markdown export, and cleans up notes when removing a book', () => {
+    const storage = memory();
+    writeBookmarkNote(storage, 'book-1', 3, '  Great quote on compounding  ');
+    writeBookmarkNote(storage, 'book-2', 0, 'Opening thought');
+    expect(readBookmarkNotes(storage)).toEqual({ 'book-1:3': 'Great quote on compounding', 'book-2:0': 'Opening thought' });
+    const md = formatBookmarksMarkdown([
+      { id: 'book-1', title: 'Poor Charlie', bookmarks: [3], bookmarkPreviews: { 3: { text: 'Invert, always invert.', page: 42 } } },
+    ], readBookmarkNotes(storage));
+    expect(md).toContain('## Poor Charlie');
+    expect(md).toContain('> Invert, always invert.');
+    expect(md).toContain('Passage 4, Page 42');
+    expect(md).toContain('**Note:** Great quote on compounding');
+    writeBookmarkNote(storage, 'book-2', 0, '   ');
+    expect(readBookmarkNotes(storage)['book-2:0']).toBeUndefined();
+    removeReadingCheckpoint(storage, 'book-1');
+    expect(readBookmarkNotes(storage)).toEqual({});
   });
 });

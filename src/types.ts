@@ -33,6 +33,7 @@ export interface ExportJob {
   id: string; title: string; engine: string; voiceName: string; output: string; created: number;
   status: 'paused' | 'loading' | 'running' | 'encoding' | 'error' | 'complete'; message: string;
   progress: number; audioSeconds: number; chapterCount: number; estimatedWorkingBytes: number;
+  queued?: boolean;
   completedCharacters?: number; totalCharacters?: number;
     encodedSamples?: number;
     finishing?: { phase: 'encoding' | 'assembling' | 'indexing' | 'checking' | 'saving'; startedAt: number; updatedAt: number; percent?: number; encodedSeconds?: number; totalSeconds?: number; remainingSeconds?: number };
@@ -52,7 +53,7 @@ export interface DesktopBridge {
   exportRuntime(): Promise<ExportRuntime>;
   exportJobs(): Promise<ExportJob[]>;
   createExport(request: ExportRequest): Promise<ExportJob | null>;
-  controlExport(jobId: string, action: 'pause' | 'resume'): Promise<boolean>;
+  controlExport(jobId: string, action: 'pause' | 'resume' | 'queue' | 'unqueue' | 'delete'): Promise<boolean>;
   exportSample(request: ExportRequest): Promise<ExportSample>;
   revealExport(jobId: string): Promise<void>;
   onExportProgress(listener: (message: { type: string; job?: ExportJob; error?: string }) => void): () => void;

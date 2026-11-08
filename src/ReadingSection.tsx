@@ -8,7 +8,7 @@ import type { SpeechPart } from './speechPlan';
 
 interface Props {
   location: DocumentLocation; segments: Segment[]; pdf: boolean; count: number;
-  position: number; bookmarks: number[]; search: string; disabled: boolean;
+  position: number; bookmarks: number[]; search: string; filter?: boolean; disabled: boolean;
   force: boolean; target?: number; fontSize: number; fontTheme: string;
   spokenParts?: SpeechPart[];
   activeRef: RefObject<HTMLButtonElement | null>;
@@ -19,14 +19,14 @@ interface Props {
 /** Keep the page landmarks, but mount words only around the viewport (plus the
  * audio/jump target). Measured placeholders keep scrolling stable on eviction. */
 export default memo(function ReadingSection(props: Props) {
-  const { location, segments, pdf, count, position, bookmarks, search, disabled, force, target, fontSize, fontTheme, spokenParts, activeRef, onRead, onOriginal } = props;
+  const { location, segments, pdf, count, position, bookmarks, search, filter = true, disabled, force, target, fontSize, fontTheme, spokenParts, activeRef, onRead, onOriginal } = props;
   const section = useRef<HTMLElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const [nearby, setNearby] = useState(location.number === 1);
   const [size, setSize] = useState({ width: 0, height: 0 });
   const visible = nearby || force;
   const matching = useMemo(() => segments.slice(location.start, location.end).map((segment, offset) => ({ segment, index: location.start + offset }))
-    .filter(({ segment }) => !search || segment.text.toLowerCase().includes(search.toLowerCase())), [segments, location, search]);
+    .filter(({ segment }) => !search || !filter || segment.text.toLowerCase().includes(search.toLowerCase())), [segments, location, search, filter]);
   const estimated = useMemo(() => matching.reduce((height, { segment }) => height + Math.ceil(segment.text.length / Math.max(12, (size.width || 450) / (fontSize * .5))) * fontSize * 1.95 + 30, 0) || 160, [matching, size.width, fontSize, fontTheme]);
   useEffect(() => {
     const element = section.current;

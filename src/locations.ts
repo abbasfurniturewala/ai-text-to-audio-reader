@@ -85,3 +85,73 @@ export function locationPath(entries: DocumentLocation[], key: string): Document
   }
   return [];
 }
+
+export function chapterRemainingWords(chapters: DocumentLocation[], locations: DocumentLocation[], wordOffsets: number[], position: number, fraction = 0): { title: string; words: number; endSegment: number } | undefined {
+  if (wordOffsets.length <= 1) return;
+  const before = wordOffsets[position] || 0, segWords = (wordOffsets[position + 1] ?? before) - before;
+  const spoken = before + segWords * Math.max(0, Math.min(1, fraction));
+  if (chapters.length) {
+    const flat = flattenLocations(chapters).map(entry => ({ ...entry, at: entry.targetSegment ?? entry.start })).sort((a, b) => a.at - b.at);
+    let currentTitle = 'Opening pages';
+    for (const entry of flat) if (entry.at <= position) currentTitle = entry.title;
+    const next = flat.find(entry => entry.at > position);
+    const endSegment = next ? next.at : wordOffsets.length - 1;
+    return { title: currentTitle, words: Math.max(0, (wordOffsets[endSegment] ?? wordOffsets.at(-1)!) - spoken), endSegment };
+  }
+  if (locations.length > 1) {
+    const loc = locationForPosition(locations, position);
+    if (!loc) return;
+    return { title: loc.title, words: Math.max(0, (wordOffsets[loc.end] ?? wordOffsets.at(-1)!) - spoken), endSegment: loc.end };
+  }
+}
+
+export interface ExportChapter {
+  key: string;
+  title: string;
+  start: number;
+  end: number;
+  page: number;
+  words: number;
+  backMatter: boolean;
+}
+
+const BACK_MATTER_RE = /^(index|bibliography|references|works cited|endnotes|notes|footnotes|glossary|acknowledg(e)?ments|about the author|copyright|colophon|appendix|appendices|further reading|sources)\b/i;
+
+export function exportableChapters(doc: ReaderDocument | undefined): ExportChapter[] {
+  if (!doc?.segments.length) return [];
+  const pages = documentLocations(doc), chapters = chapterLocations(doc, pages);
+  const raw: { key: string; title: string; start: number; page: number }[] = [];
+  if (chapters.length) {
+    const sorted = [...chapters].map(item => ({ key: item.key, title: item.title, start: item.targetSegment ?? item.start, page: item.page })).sort((a, b) => a.start - b.start);
+    if (sorted[0].start > 0) raw.push({ key: 'opening', title: 'Opening pages', start: 0, page: doc.segments[0]?.page || 1 });
+    for (const item of sorted) {
+      if (raw.length && item.start <= raw.at(-1)!.start) continue;
+      raw.push(item);
+    }
+  } else {
+    for (const loc of pages) if (loc.end > loc.start) raw.push({ key: loc.key, title: loc.title, start: loc.start, page: loc.page });
+  }
+  return raw.map((item, index) => {
+    const end = index + 1 < raw.length ? raw[index + 1].start : doc.segments.length;
+    const words = doc.segments.slice(item.start, end).reduce((sum, seg) => sum + seg.text.split(/\s+/).length, 0);
+    return { ...item, end, words, backMatter: BACK_MATTER_RE.test(item.title.trim()) };
+  }).filter(item => item.end > item.start);
+}
+
+export function filterDocumentByChapters(doc: ReaderDocument, selectedKeys: ReadonlySet<string>, chapters = exportableChapters(doc)): Pick<ReaderDocument, 'id' | 'title' | 'kind' | 'segments' | 'pageCount' | 'topics' | 'pageLabels'> {
+  const chosen = chapters.filter(item => selectedKeys.has(item.key));
+  if (!chosen.length || chosen.length === chapters.length) {
+    const { id, title, kind, segments, pageCount, topics, pageLabels } = doc;
+    return { id, title, kind, segments, pageCount, topics, pageLabels };
+  }
+  const segments: ReaderDocument['segments'] = [];
+  const topics: NonNullable<ReaderDocument['topics']> = [];
+  for (const chapter of chosen) {
+    const slice = doc.segments.slice(chapter.start, chapter.end);
+    if (!slice.length) continue;
+    const segment = segments.length;
+    segments.push(...slice);
+    topics.push({ title: chapter.title, page: slice[0].page, segment });
+  }
+  return { id: doc.id, title: doc.title, kind: doc.kind, segments, pageCount: doc.pageCount, topics, ...(doc.pageLabels ? { pageLabels: doc.pageLabels } : {}) };
+}

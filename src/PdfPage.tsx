@@ -9,12 +9,12 @@ import type { ReaderMatch } from './readerView';
 export type { PdfJump } from './PdfSheet';
 
 interface Props {
-  documentId: string; pageNumber: number; segments: Segment[]; zoom?: number;
+  documentId: string; pageNumber: number; segments: Segment[]; zoom?: number; night?: boolean;
   jumpTarget?: PdfJump; spokenParts?: SpeechPart[]; searchMatches?: ReaderMatch[]; searchMatch?: ReaderMatch;
   onWord(index: number, character: number): void; onPage(page: number): void;
 }
 export default memo(function PdfPage(props: Props) {
-  const { documentId, pageNumber, segments, onWord, jumpTarget, spokenParts, zoom = 1, searchMatches = [], searchMatch } = props;
+  const { documentId, pageNumber, segments, onWord, jumpTarget, spokenParts, zoom = 1, night = false, searchMatches = [], searchMatch } = props;
   const root = useRef<HTMLDivElement>(null), slots = useRef<Array<HTMLDivElement | null>>([]);
   const handles = useRef(new Map<number, PdfDestination>()), ranges = useRef(new Map<number, PdfRanges>());
   const pending = useRef<{ page: number; target: PdfJump } | undefined>(undefined);
@@ -113,7 +113,7 @@ export default memo(function PdfPage(props: Props) {
     const observer = new ResizeObserver(schedule); observer.observe(scroller); observer.observe(container); schedule();
     return () => { cancelAnimationFrame(frame); refresh.current = () => {}; observer.disconnect(); scroller.removeEventListener('scroll', schedule); events.forEach(name => scroller.removeEventListener(name, cancel)); };
   }, [opened, position, publish]);
-  return <div className="pdf-document" ref={root} data-page={pageNumber} aria-label="Continuous PDF document">{error ? <p role="alert">{error}</p> : !opened || opened.id !== documentId ? <div className="pdf-loading"><LoaderCircle className="spin" /> Opening document…</div> : Array.from({ length: opened.pdf.numPages }, (_, index) => {
+  return <div className="pdf-document" ref={root} data-page={pageNumber} data-pdf-night={night || undefined} aria-label="Continuous PDF document">{error ? <p role="alert">{error}</p> : !opened || opened.id !== documentId ? <div className="pdf-loading"><LoaderCircle className="spin" /> Opening document…</div> : Array.from({ length: opened.pdf.numPages }, (_, index) => {
     const page = index + 1, mounted = page >= windowPages.first && page <= windowPages.last;
     return <div key={page} ref={element => { slots.current[page] = element; }} className="pdf-page-slot" data-pdf-page={page} data-current={page === pageNumber} data-mounted={mounted} style={{ width: `calc(min(100%, var(--pdf-fit-width, 900px)) * ${zoom})`, aspectRatio: sizes[page] || opened.ratio }} aria-label={`PDF page ${page}`}>
       {mounted ? <PdfSheet pdf={opened.pdf} pageNumber={page} segments={segments} zoom={zoom} current={page === pageNumber} spokenParts={spokenParts} searchMatches={searchMatches} searchMatch={searchMatch} onWord={onWord} onSize={measure} onReady={ready} onRanges={updateRanges} /> : <span className="pdf-placeholder">Page {page}</span>}

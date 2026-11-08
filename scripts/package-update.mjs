@@ -3,5 +3,5 @@ import { readFile } from 'node:fs/promises';
 const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
 await build({
   targets: Platform.WINDOWS.createTarget('dir', Arch.x64),
-  config: { directories: { output: `release/staged-${pkg.version}` } },
+  config: { electronDist: 'node_modules/electron/dist', directories: { output: `release/staged-${pkg.version}` } },
 });

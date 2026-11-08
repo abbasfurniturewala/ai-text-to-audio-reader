@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdir, open, readFile, rename, stat, unlink, link, copyFile, constants, statfs } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, rm, stat, unlink, link, copyFile, constants, statfs } from 'node:fs/promises';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
@@ -142,7 +142,7 @@ export class AudiobookJobs {
       }
       const request = validateExport(JSON.parse(await readFile(path.join(directory, 'source.json'), 'utf8')));
       if (job.sourceHash !== exportFingerprint(request)) throw new Error('The export source or settings changed. Start a new job to keep the audio consistent.');
-      job.status = 'loading'; job.message = 'Checking the saved export and local model…'; await this.save(job);
+      delete job.queued; job.status = 'loading'; job.message = 'Checking the saved export and local model…'; await this.save(job);
       const config = await this.configurationForJob();
       const identity = this.backendFactory ? 'qa-fixture-v1' : await (await import('./audiobook-backend.mjs')).exportIdentity({ engine: request.engine, runtimeRoot: this.runtimeRoot, modelRoot: this.modelRoot });
       if (job.modelIdentity && job.modelIdentity !== identity) throw new Error('The model or narration pipeline changed. Start a new export to keep this audiobook consistent. Completed audio is retained.');
@@ -237,6 +237,22 @@ export class AudiobookJobs {
     for (const name of ['audio.pcm', 'source.json', 'finished.m4b', 'chapters.txt', 'reference.wav', 'reference.mp3', 'reference.m4a', 'reference.flac', 'reference.ogg']) {
       try { await unlink(path.join(this.directory(id), name)); } catch { /* A complete job stays complete if Windows temporarily holds a file. */ }
     }
+  }
+  async queue(id, enabled = true) {
+    const directory = this.directory(id);
+    if (this.active?.job?.id === id) return this.summary(this.active.job);
+    const job = JSON.parse(await readFile(path.join(directory, 'job.json'), 'utf8'));
+    if (job.version !== 1 || job.id !== id || job.status === 'complete') return this.summary(job);
+    if (!engines.includes(job.engine)) throw new Error('This model was removed. Create a new export with Kokoro.');
+    if (enabled) { job.queued = true; job.status = 'paused'; job.message = 'Queued. Will start automatically after the current export.'; }
+    else { delete job.queued; job.message = 'Ready to resume from the last saved phrase.'; }
+    await this.save(job); return this.summary(job);
+  }
+  async remove(id) {
+    const directory = this.directory(id);
+    if (this.active?.job?.id === id) throw new Error('Pause the export before removing it.');
+    await rm(directory, { recursive: true, force: true });
+    return true;
   }
   async sample(input) {
     const request = validateExport(input);

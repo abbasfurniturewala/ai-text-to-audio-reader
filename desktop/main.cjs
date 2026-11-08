@@ -113,7 +113,7 @@ async function setup() {
     return exportRequest('create', { request, output: result.filePath });
   });
   handle('reader:export-control', (jobId, action) => {
-    if (typeof jobId !== 'string' || (jobId !== 'sample' && !/^[a-f0-9-]{36}$/.test(jobId)) || !['pause', 'resume'].includes(action) || (jobId === 'sample' && action !== 'pause')) throw new Error('Invalid export action.');
+    if (typeof jobId !== 'string' || (jobId !== 'sample' && !/^[a-f0-9-]{36}$/.test(jobId)) || !['pause', 'resume', 'queue', 'unqueue', 'delete'].includes(action) || (jobId === 'sample' && action !== 'pause')) throw new Error('Invalid export action.');
     return exportRequest(action, { jobId });
   });
   handle('reader:export-sample', request => exportRequest('sample', { request }));

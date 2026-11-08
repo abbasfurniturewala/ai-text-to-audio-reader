@@ -120,4 +120,15 @@ describe('offline audiobook jobs', () => {
     const jobs = new AudiobookJobs({ root, configuration: {}, backendFactory: factory([]), onProgress: job => { if (job.next === 2) void jobs.pause(job.id); } });
     const created = await jobs.create(request, path.join(root, 'book.m4b')), result = await jobs.start(created.id); expect(result.status).toBe('paused'); expect(result.chapterCount).toBe(2);
   });
+  it('queues paused exports and removes export workspaces to reclaim disk space', async () => {
+    const root = await folder(), jobs = new AudiobookJobs({ root, configuration: {}, backendFactory: factory([]) });
+    const created = await jobs.create(input(), path.join(root, 'book.m4b'));
+    const queued = await jobs.queue(created.id, true);
+    expect(queued.queued).toBe(true);
+    expect(queued.message).toMatch(/Queued/);
+    const unqueued = await jobs.queue(created.id, false);
+    expect(unqueued.queued).toBeUndefined();
+    expect(await jobs.remove(created.id)).toBe(true);
+    expect(await jobs.list()).toEqual([]);
+  });
 });
