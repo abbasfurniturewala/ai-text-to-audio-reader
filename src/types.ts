@@ -30,9 +30,12 @@ export interface ExportRequest {
   from: number; engine: ExportEngine; voice: string; voiceName: string;
 }
 export interface ExportJob {
-  id: string; title: string; engine: ExportEngine; voiceName: string; output: string; created: number;
+  id: string; title: string; engine: string; voiceName: string; output: string; created: number;
   status: 'paused' | 'loading' | 'running' | 'encoding' | 'error' | 'complete'; message: string;
   progress: number; audioSeconds: number; chapterCount: number; estimatedWorkingBytes: number;
+  completedCharacters?: number; totalCharacters?: number;
+    encodedSamples?: number;
+    finishing?: { phase: 'encoding' | 'assembling' | 'indexing' | 'checking' | 'saving'; startedAt: number; updatedAt: number; percent?: number; encodedSeconds?: number; totalSeconds?: number; remainingSeconds?: number };
 }
 export interface ExportRuntime { tools: boolean; kokoroGpu: boolean; capabilities: Record<string, unknown> }
 export interface ExportSample { bytes: Uint8Array; loadMs: number; generationMs: number; audioSeconds: number; text: string; device: string }

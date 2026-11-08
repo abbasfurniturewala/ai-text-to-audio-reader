@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { ExportJob } from './types';
 
 export const exportActive = (job: ExportJob) => ['loading', 'running', 'encoding'].includes(job.status);
+export const exportSupported = (job: ExportJob) => ['kokoro-cuda', 'kokoro-cpu'].includes(job.engine);
 export const exportError = (reason: unknown) => (reason instanceof Error ? reason.message : String(reason)).replace(/^Error invoking remote method '[^']+': (Error: )?/, '');
 export function useExportJobs() {
   const [jobs, setJobs] = useState<ExportJob[]>([]), [loading, setLoading] = useState(true), [error, setError] = useState('');

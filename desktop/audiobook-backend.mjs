@@ -6,7 +6,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KokoroTTS } from 'kokoro-js';
 import { AutoTokenizer, env } from '@huggingface/transformers';
-import { guardTokenWindow } from './speech-input.mjs';
+import { generateComplete, guardTokenWindow } from './speech-input.mjs';
 import { generateVoice } from './speech-voice.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -40,7 +40,8 @@ class PythonAudio {
   constructor(executable, engine, model) {
     this.ready = new Promise((resolve, reject) => this.pending.set(0, { resolve, reject }));
     const helper = path.join(directory, 'audiobook-python.py').replace(/([\\/])app\.asar([\\/])/, '$1app.asar.unpacked$2');
-    this.child = spawn(executable, ['-u', helper, '--engine', engine, '--model', model], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PYTHONUTF8: '1', HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_HUB_DISABLE_IMPLICIT_TOKEN: '1' } });
+    const spawnArgs = ['-u', helper, '--engine', engine, '--model', model];
+    this.child = spawn(executable, spawnArgs, { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, PYTHONUTF8: '1', HF_HUB_OFFLINE: '1', TRANSFORMERS_OFFLINE: '1', HF_HUB_DISABLE_IMPLICIT_TOKEN: '1' } });
     this.child.stdout.on('data', data => { try { this.receive(data); } catch (error) { this.fail(error); } });
     this.child.stderr.on('data', data => { this.log = (this.log + data).slice(-16000); });
     this.child.on('error', error => this.fail(error));

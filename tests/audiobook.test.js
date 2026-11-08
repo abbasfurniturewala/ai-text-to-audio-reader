@@ -26,11 +26,25 @@ describe('offline audiobook jobs', () => {
     } finally { await closed; }
   });
   it('validates source, chapter positions, settings and native paths before creation', async () => {
-    const good = input(); expect(validateExport(good)).toEqual(good);
-    for (const bad of [null, { ...good, voice: '../secret' }, { ...good, engine: 'cloud' }, { ...good, from: -1 }, { ...good, engine: 'qwen-cuda', voice: 'af_heart' }, { ...good, document: { ...good.document, segments: [{ text: 'bad', page: -1 }] } }, { ...good, document: { ...good.document, topics: [{ title: 'bad', page: 1, segment: 99 }] } }]) expect(() => validateExport(bad)).toThrow();
+    const good = input();
+    expect(validateExport(good)).toEqual(good); expect(validateExport({ ...good, engine: 'kokoro-cpu' }).engine).toBe('kokoro-cpu');
+    for (const bad of [null, { ...good, voice: '../secret' }, { ...good, engine: 'cloud' }, { ...good, from: -1 }, { ...good, engine: 'qwen-cuda', voice: 'af_heart' }, { ...good, engine: 'chatterbox-cuda' }, { ...good, engine: 'chatterbox-standard-cuda' }, { ...good, referencePath: path.resolve('sample.wav') }, { ...good, voice: 'custom_reference' }, { ...good, document: { ...good.document, segments: [{ text: 'bad', page: -1 }] } }, { ...good, document: { ...good.document, topics: [{ title: 'bad', page: 1, segment: 99 }] } }]) expect(() => validateExport(bad)).toThrow();
     const root = await folder(), jobs = new AudiobookJobs({ root });
     expect(() => jobs.directory('../../outside')).toThrow();
     await expect(jobs.create(good, 'relative.m4b')).rejects.toThrow(); await expect(jobs.create(good, path.join(root, 'book.wav'))).rejects.toThrow();
+  });
+  it('keeps removed-model history and audio without resuming it through a different model', async () => {
+    for (const engine of ['chatterbox-cuda', 'chatterbox-standard-cuda']) {
+      const root = await folder(), calls = [], jobs = new AudiobookJobs({ root, configuration: {}, backendFactory: factory(calls) });
+      const created = await jobs.create(input(), path.join(root, 'book.m4b')), directory = path.join(root, created.id), legacy = { ...input(), engine };
+      const saved = JSON.parse(await readFile(path.join(directory, 'job.json'), 'utf8')), prefix = Buffer.alloc(2400, 7);
+      await writeFile(path.join(directory, 'source.json'), JSON.stringify(legacy)); await writeFile(path.join(directory, 'audio.pcm'), prefix);
+      await atomicJson(path.join(directory, 'job.json'), { ...saved, engine, sourceHash: exportFingerprint(legacy), next: 1, samples: 1200 });
+      expect((await jobs.list())[0]).toMatchObject({ engine, status: 'paused', audioSeconds: .05 });
+      expect((await jobs.start(created.id)).status).toBe('error'); expect(calls).toEqual([]); expect(await readFile(path.join(directory, 'audio.pcm'))).toEqual(prefix);
+      const failed = JSON.parse(await readFile(path.join(directory, 'job.json'), 'utf8')); await atomicJson(path.join(directory, 'job.json'), { ...failed, status: 'complete', progress: 100 });
+      expect((await jobs.list())[0]).toMatchObject({ engine, status: 'complete', progress: 100 });
+    }
   });
   it('maps hierarchical EPUB and page-only PDF chapters in source order', () => {
     const doc = input().document;

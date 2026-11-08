@@ -5,6 +5,7 @@ import { exportActive, exportError, useExportJobs } from './useExportJobs';
 import type { ExportEngine, ExportRequest, ExportRuntime, ExportSample, ReaderDocument } from './types';
 
 interface Sample extends Omit<ExportSample, 'bytes'> { url: string; name: string }
+const engineLabel = (engine: ExportEngine) => engine === 'kokoro-cuda' ? 'GPU Kokoro' : 'CPU Kokoro';
 export default function AudiobookExport({ document: doc, voiceId, wav, wavBusy, onClose, onManage }: { document?: ReaderDocument; voiceId: string; wav: React.ReactNode; wavBusy: boolean; onClose(): void; onManage(): void }) {
   const [format, setFormat] = useState('m4b'), [runtime, setRuntime] = useState<ExportRuntime>();
   const [engine, setEngine] = useState<ExportEngine>('kokoro-cuda'), [voice, setVoice] = useState(voiceId);
@@ -17,7 +18,7 @@ export default function AudiobookExport({ document: doc, voiceId, wav, wavBusy, 
     return () => { mounted.current = false; urls.current.forEach(url => URL.revokeObjectURL(url)); if (comparing.current) void window.cadence?.controlExport('sample', 'pause').catch(() => {}); };
   }, []);
   const words = useMemo(() => doc?.segments.slice(range === 'all' ? 0 : doc.position).reduce((sum, segment) => sum + segment.text.split(/\s+/).length, 0) || 0, [doc?.segments, doc?.position, range]);
-  const workingGb = words / 150 * 60 * 24000 * 2 * 1.3 / 1000000000 + .27;
+  const workingGb = words / 150 * 60 * 24000 * 2 * 1.8 / 1000000000 + .27;
   const running = jobsLoading || jobs.some(exportActive);
   const request = (): ExportRequest => {
     if (!doc) throw new Error('Open a document to start a new export.');
@@ -35,7 +36,7 @@ export default function AudiobookExport({ document: doc, voiceId, wav, wavBusy, 
       const input = request(), result = await window.cadence!.exportSample(input);
       if (!mounted.current || cancelled.current) return;
       const url = URL.createObjectURL(new Blob([new Uint8Array(result.bytes)], { type: 'audio/wav' })); urls.current.push(url);
-      setSamples(previous => [...previous.slice(-2), { ...result, url, name: `${engine === 'kokoro-cuda' ? 'GPU Kokoro' : 'CPU Kokoro'} · ${input.voiceName}` }]);
+      setSamples(previous => [...previous.slice(-2), { ...result, url, name: `${engineLabel(engine)} · ${input.voiceName}` }]);
       if (urls.current.length > 3) URL.revokeObjectURL(urls.current.shift()!);
     } finally { comparing.current = false; }
   }, 'sample');

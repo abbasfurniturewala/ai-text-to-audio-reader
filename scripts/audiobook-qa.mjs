@@ -8,9 +8,10 @@ import { navigationPdf } from './navigation-fixture.mjs';
 import { menuClick } from './reader-qa-helpers.mjs';
 const require = createRequire(import.meta.url), { _electron } = require('playwright'), JSZip = require('jszip');
 const staged = process.argv.includes('--staged'), version = JSON.parse(await readFile('package.json', 'utf8')).version;
+const sustained = process.argv.includes('--sustained');
 const output = path.resolve('test-results/audiobook/ui-' + (staged ? 'staged-' : 'source-') + Date.now()); await mkdir(output, { recursive: true });
 const env = { ...process.env, CADENCE_QA: '1', CADENCE_QA_OFFLINE: '1', CADENCE_DATA_DIR: path.join(output, 'profile') }; delete env.ELECTRON_RUN_AS_NODE; delete env.CADENCE_DEV_URL;
-const checks = [], errors = [], external = [], nativeExits = []; let app, page, pdfJob, checkpoint, nativeLog = '';
+const checks = [], errors = [], external = [], nativeExits = []; let app, page, pdfJob, checkpoint, compressedPrefix, nativeLog = '';
 const epub = new JSZip(); epub.file('mimetype', 'application/epub+zip'); epub.file('META-INF/container.xml', '<container><rootfiles><rootfile full-path="OPS/book.opf"/></rootfiles></container>');
 epub.file('OPS/book.opf', '<package><metadata><title>Audiobook QA</title></metadata><manifest><item id="one" href="one.xhtml" media-type="application/xhtml+xml"/><item id="two" href="two.xhtml" media-type="application/xhtml+xml"/><item id="nav" href="nav.xhtml" properties="nav" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="one"/><itemref idref="two"/></spine></package>');
 epub.file('OPS/one.xhtml', '<html><body><h1 id="one">A quiet beginning</h1><p>The first light reached the window before the town began to stir. Across the square, a shopkeeper opened the shutters.</p></body></html>');
@@ -42,7 +43,8 @@ try {
   });
   await check('M4B is the default and cancelling the destination creates no job', async () => {
     await exportPanel(); assert.equal(await page.getByLabel('Audio format', { exact: true }).inputValue(), 'm4b'); await page.getByRole('button', { name: 'Create M4B audiobook', exact: true }).waitFor();
-    const runtime = await page.evaluate(() => window.cadence.exportRuntime()); assert(runtime.tools && runtime.kokoroGpu);
+    const runtime = await page.evaluate(() => window.cadence.exportRuntime()); assert(runtime.tools && runtime.kokoroGpu); assert.equal(runtime.chatterboxGpu, undefined); assert.equal(runtime.chatterboxStandardGpu, undefined); assert.equal(runtime.defaultReference, undefined);
+    assert.deepEqual(await page.getByLabel('Export model', { exact: true }).locator('option').evaluateAll(options => options.map(option => option.value)), ['kokoro-cuda', 'kokoro-cpu']); assert.equal(await page.getByLabel('Export voice', { exact: true }).locator('option[value="custom_reference"]').count(), 0); assert.equal(await page.evaluate(() => typeof window.cadence.chooseReferenceAudio), 'undefined');
     await app.evaluate(({ dialog }) => { dialog.showSaveDialog = async () => ({ canceled: true }); }); await page.getByRole('button', { name: 'Create M4B audiobook', exact: true }).click(); await page.waitForTimeout(200); assert.equal((await jobs()).length, 0);
   });
   if (!process.argv.includes('--skip-comparisons')) {
@@ -75,11 +77,13 @@ try {
   await page.locator('input[type=file]').setInputFiles(path.join(output, 'Scrolling.pdf')); await page.getByRole('heading', { name: 'Scrolling', exact: true }).waitFor(); await page.getByRole('button', { name: 'Document view', exact: true }).click();
   await check('PDF scrolling and real reader narration remain usable during a separate GPU export', async () => {
     await exportPanel(); await saveAs(path.join(output, 'pdf.m4b')); await page.getByRole('button', { name: 'Create M4B audiobook', exact: true }).click(); pdfJob = await until(async () => (await jobs()).find(job => job.title === 'Scrolling')); await waitJob(pdfJob.id, ['running', 'error']);
+    await until(async () => { const job = (await jobs()).find(job => job.id === pdfJob.id); assert.notEqual(job.status, 'error', job.message); return job.status === 'running' && job.encodedSamples > 0; });
     await page.getByRole('button', { name: 'Back to reading', exact: true }).click(); await page.mouse.move(20, 20); const show = page.getByRole('button', { name: 'Show playback controls', exact: true }); if (await show.isVisible()) await show.click(); await page.getByLabel('Play narration', { exact: true }).click(); await page.getByLabel('Pause narration', { exact: true }).waitFor({ timeout: 60000 });
     const scroll = await page.locator('.reader-scroll').boundingBox(); await page.mouse.move(scroll.x + scroll.width / 2, scroll.y + scroll.height / 2);
-    const measuring = page.evaluate(() => new Promise(resolve => { const frames = []; let before = performance.now(), count = 0; const step = now => { frames.push(now - before); before = now; if (++count < 100) requestAnimationFrame(step); else resolve({ max: Math.max(...frames), over50: frames.filter(time => time > 50).length, frames }); }; requestAnimationFrame(step); }));
-    for (let i = 0; i < 5; i++) { await page.mouse.wheel(0, 500); await page.waitForTimeout(150); }
-    const frames = await measuring; assert(frames.max < 300, JSON.stringify(frames)); await writeFile(path.join(output, 'scroll-during-export.json'), JSON.stringify(frames, null, 2));
+    const compressedBeforeScroll = (await jobs()).find(job => job.id === pdfJob.id).encodedSamples;
+    const measuring = page.evaluate(limit => new Promise(resolve => { const frames = []; let before = performance.now(), count = 0; const step = now => { frames.push(now - before); before = now; if (++count < limit) requestAnimationFrame(step); else resolve({ max: Math.max(...frames), p95: [...frames].sort((a, b) => a - b)[Math.floor(frames.length * .95)], over50: frames.filter(time => time > 50).length, frames }); }; requestAnimationFrame(step); }), sustained ? 3600 : 900);
+    for (let i = 0; i < (sustained ? 100 : 30); i++) { await page.mouse.wheel(0, sustained ? i % 40 < 24 ? 120 : -120 : i < 18 ? 300 : -100); await page.waitForTimeout(sustained ? 500 : 150); }
+    const frames = await measuring; assert(frames.max < 250 && frames.p95 < 40 && frames.over50 < 18, JSON.stringify(frames)); frames.compressedBeforeScroll = compressedBeforeScroll; frames.compressedAfterScroll = (await jobs()).find(job => job.id === pdfJob.id).encodedSamples; assert(frames.compressedAfterScroll > compressedBeforeScroll); await writeFile(path.join(output, 'scroll-during-export.json'), JSON.stringify(frames, null, 2));
     const browsed = Number(await page.locator('.pdf-document').getAttribute('data-page')); assert(browsed > 1); assert(await page.getByLabel('Pause narration', { exact: true }).isEnabled());
     await manager(); assert.equal(await page.getByLabel('Pause narration', { exact: true }).count(), 1); await page.getByRole('button', { name: 'Back to reading', exact: true }).click(); await page.locator('.pdf-document').waitFor(); await until(async () => Number(await page.locator('.pdf-document').getAttribute('data-page')) === browsed);
     await page.mouse.move(20, 20); const reveal = page.getByRole('button', { name: 'Show playback controls', exact: true }); if (await reveal.isVisible()) await reveal.click(); await page.getByLabel('Pause narration', { exact: true }).click();
@@ -87,12 +91,15 @@ try {
   });
   await check('Pause commits completed PDF phrases and a normal app restart restores the saved export', async () => {
     await manager(); const row = page.locator(`[data-export-id="${pdfJob.id}"]`); await row.getByRole('button', { name: 'Pause export', exact: true }).click(); await waitJob(pdfJob.id, ['paused']); checkpoint = JSON.parse(await readFile(path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'job.json'), 'utf8')); assert(checkpoint.next > 0 && checkpoint.samples > 0);
+    assert(checkpoint.encodedSamples > 0); compressedPrefix = await readFile(path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'encoding/part-00000000.aac'));
     await close(); await start(); await page.getByRole('heading', { name: 'Scrolling', exact: true }).waitFor(); assert.equal(await page.getByLabel('Pause narration', { exact: true }).count(), 0);
     await manager(); assert.equal((await jobs()).find(job => job.id === pdfJob.id).status, 'paused'); const saved = JSON.parse(await readFile(path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'job.json'), 'utf8')); assert.equal(saved.next, checkpoint.next); assert.equal(saved.samples, checkpoint.samples);
+    assert.deepEqual(await readFile(path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'encoding/part-00000000.aac')), compressedPrefix); assert.match(await page.locator(`[data-export-id="${pdfJob.id}"] small`).textContent(), /compressed and saved/);
   });
   await check('Resume continues after the saved phrase and retains the original PCM prefix', async () => {
     const filename = path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'audio.pcm'), prefix = (await readFile(filename)).subarray(0, 10000), row = page.locator(`[data-export-id="${pdfJob.id}"]`);
     await row.getByRole('button', { name: 'Resume export', exact: true }).click(); await until(async () => (await jobs()).find(job => job.id === pdfJob.id).next > checkpoint.next); await row.getByRole('button', { name: 'Pause export', exact: true }).click(); await waitJob(pdfJob.id, ['paused']); assert.deepEqual((await readFile(filename)).subarray(0, prefix.length), prefix);
+    assert.deepEqual(await readFile(path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'encoding/part-00000000.aac')), compressedPrefix);
     await page.screenshot({ path: path.join(output, 'resumed-job.png') });
   });
   await check('Manager filters, search, completed files and compact layout retain both exports', async () => {
@@ -124,6 +131,7 @@ try {
     await new Promise((resolve, reject) => { const kill = spawn('taskkill.exe', ['/PID', String(process.pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }); kill.on('error', reject); kill.on('exit', code => code === 0 ? resolve() : reject(new Error('The isolated crash test could not stop its process tree.'))); });
     await exited; app = null;
     const saved = JSON.parse(await readFile(path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'job.json'), 'utf8')); assert(saved.next > before); assert.deepEqual((await readFile(pcm)).subarray(0, prefix.length), prefix);
+    assert.deepEqual(await readFile(path.join(env.CADENCE_DATA_DIR, 'audiobook-jobs', pdfJob.id, 'encoding/part-00000000.aac')), compressedPrefix);
     await start(); await page.getByRole('heading', { name: 'Scrolling', exact: true }).waitFor(); await manager(); assert.equal((await jobs()).find(job => job.id === pdfJob.id).status, 'paused'); await page.locator(`[data-export-id="${pdfJob.id}"]`).getByRole('button', { name: 'Resume export', exact: true }).waitFor(); await page.waitForTimeout(400); assert.equal((await jobs()).find(job => job.id === pdfJob.id).next, saved.next); assert.equal((await jobs()).find(job => job.id === epubJob.id).status, 'complete');
     await page.screenshot({ path: path.join(output, 'manager-after-abrupt-exit.png') });
   });

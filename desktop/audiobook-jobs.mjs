@@ -4,6 +4,8 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 import { exportSource, chapterTargets, exportOffsets, speechClipBounds, pcm16, wavBytes } from './export-core.mjs';
+import { ffmpegProgress, encodingProgress, finishingProgress } from './export-encoding.mjs';
+import { BackgroundEncoding, cleanupEncoding } from './audiobook-encoding.mjs';
 
 const engines = ['kokoro-cuda', 'kokoro-cpu'];
 const rate = 24000;
@@ -30,6 +32,7 @@ export function validateExport(request) {
   };
   const from = request.from ?? 0;
   if (!Number.isInteger(from) || from < 0 || from >= segments.length || !engines.includes(request.engine) || typeof request.voice !== 'string' || !/^[a-zA-Z0-9_-]{2,100}$/.test(request.voice)) throw new Error('Choose valid export settings.');
+  if (request.referencePath !== undefined || request.voice === 'custom_reference') throw new Error('Reference voices are no longer supported. Choose a Kokoro voice.');
   const pageLabels = doc.pageLabels;
   if (pageLabels !== undefined && (!Array.isArray(pageLabels) || pageLabels.length > doc.pageCount || pageLabels.some(label => typeof label !== 'string' || label.length > 1000))) throw new Error('Invalid page labels.');
   return { document: { id: doc.id, title: doc.title, kind: doc.kind, pageCount: doc.pageCount, segments, ...(doc.topics ? { topics: topics(doc.topics) } : {}), ...(pageLabels ? { pageLabels } : {}) }, from, engine: request.engine, voice: request.voice, voiceName: typeof request.voiceName === 'string' ? request.voiceName.slice(0, 100) : request.voice };
@@ -78,12 +81,12 @@ export async function publishAudio(temporary, destination, { id = randomUUID(), 
   }
   await unlink(temporary);
 }
-function executable(command, args, onChild) {
+function executable(command, args, onChild, onData) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }); let output = '', error = '';
     onChild?.(child);
-    child.stdout.on('data', data => { output = (output + data).slice(-1000000); }); child.stderr.on('data', data => { error = (error + data).slice(-4000); });
-    child.on('error', reject); child.on('exit', code => code === 0 ? resolve(output) : reject(new Error(`Audio encoding stopped (${code}). ${error}`)));
+    child.stdout.on('data', data => { if (onData) onData(data); else output = (output + data).slice(-1000000); }); child.stderr.on('data', data => { error = (error + data).slice(-4000); });
+    child.on('error', reject); child.on('close', code => code === 0 ? resolve(output) : reject(new Error(`Audio encoding stopped (${code}). ${error}`)));
   });
 }
 export class AudiobookJobs {
@@ -92,7 +95,7 @@ export class AudiobookJobs {
   }
   directory(id) { if (typeof id !== 'string' || !/^[a-f0-9-]{36}$/.test(id)) throw new Error('Invalid export job.'); return path.join(this.root, id); }
   async configurationForJob() { return this.configuration || (await import('./audiobook-backend.mjs')).runtimeConfiguration(this.runtimeRoot); }
-  async backend(engine) { return this.backendFactory ? this.backendFactory(engine) : (await import('./audiobook-backend.mjs')).createExportBackend({ engine, runtimeRoot: this.runtimeRoot, modelRoot: this.modelRoot }); }
+  async backend(engine, options = {}) { return this.backendFactory ? this.backendFactory(engine) : (await import('./audiobook-backend.mjs')).createExportBackend({ engine, ...options, runtimeRoot: this.runtimeRoot, modelRoot: this.modelRoot }); }
   async list() {
     const { readdir } = await import('node:fs/promises'); await mkdir(this.root, { recursive: true }); const jobs = [];
     for (const entry of await readdir(this.root)) {
@@ -101,7 +104,7 @@ export class AudiobookJobs {
     }
     return jobs.sort((a, b) => b.created - a.created);
   }
-  summary(job) { const { sourceHash, finishedHash, chapters, ...summary } = job; return { ...summary, chapterCount: chapters.length, audioSeconds: job.samples / rate }; }
+  summary(job) { const { sourceHash, finishedHash, chapters, ...summary } = job, active = this.active?.job?.id === job.id ? this.active : undefined, finishing = job.status === 'encoding' ? active?.finishing : undefined; return { ...summary, chapterCount: chapters.length, audioSeconds: job.samples / rate, ...(active?.compression ? { encodedSamples: active.compression.completed } : {}), ...(finishing ? { finishing } : {}) }; }
   async save(job) { job.updated = Date.now(); await atomicJson(path.join(this.directory(job.id), 'job.json'), job); this.onProgress(this.summary(job)); }
   async create(input, output) {
     const request = validateExport(input);
@@ -110,12 +113,12 @@ export class AudiobookJobs {
     const id = randomUUID(), directory = this.directory(id); await mkdir(directory, { recursive: true });
     const source = await open(path.join(directory, 'source.json'), 'wx'); try { await source.writeFile(JSON.stringify(request)); await source.sync(); } finally { await source.close(); }
     const offsets = exportOffsets(request.document), characters = offsets.at(-1) - offsets[request.from];
-    const job = { version: 1, id, created: Date.now(), title: request.document.title, engine: request.engine, voice: request.voice, voiceName: request.voiceName, output, sourceHash: exportFingerprint(request), status: 'paused', message: 'Ready to export.', next: 0, samples: 0, completedCharacters: 0, totalCharacters: characters, progress: 0, chapters: [], generationMs: 0, estimatedWorkingBytes: Math.ceil(characters / 5 / 150 * 60 * rate * 2 * 1.3) + 256 * 1024 * 1024 };
+    const job = { version: 1, id, created: Date.now(), title: request.document.title, engine: request.engine, voice: request.voice, voiceName: request.voiceName, output, sourceHash: exportFingerprint(request), status: 'paused', message: 'Ready to export.', next: 0, samples: 0, encodedSamples: 0, completedCharacters: 0, totalCharacters: characters, progress: 0, chapters: [], generationMs: 0, estimatedWorkingBytes: Math.ceil(characters / 5 / 150 * 60 * rate * 2 * 1.8) + 256 * 1024 * 1024 };
     await this.save(job); return this.summary(job);
   }
   async pause(id) {
     const active = this.active; if (active?.job?.id !== id) return;
-    active.cancelled = true; active.encoder?.kill();
+    active.cancelled = true; active.encoder?.kill(); void active.compression?.stop();
     if (active.backend) await active.backend.close(true);
     await active.done?.catch(() => {});
   }
@@ -150,6 +153,20 @@ export class AudiobookJobs {
       const size = (await file.stat()).size;
       if (size < job.samples * 2) throw new Error('Completed export audio is missing. Keep the job folder intact and start a new export.');
       if (size > job.samples * 2) await file.truncate(job.samples * 2);
+      const check = () => { if (active.cancelled) throw new Error('Export paused.'); active.compression?.check(); };
+      const finishing = details => { active.finishing = finishingProgress(active.finishing, details); this.onProgress(this.summary(job)); };
+      let compressionBegan = 0, compressedBefore = 0;
+      const ensureEncoding = async () => {
+        if (!active.compression) {
+          active.compression = new BackgroundEncoding({ directory, pcmPath, ffmpeg: config.ffmpeg, sourceHash: job.sourceHash, modelIdentity: job.modelIdentity, atomicJson, cancelled: () => active.cancelled, onChild: child => { active.encoder = child; }, onProgress: (saved, current) => {
+            const changed = job.encodedSamples !== saved; job.encodedSamples = saved;
+            if (job.status === 'encoding' && compressionBegan) finishing(encodingProgress({ seconds: current / rate }, job.samples / rate, (performance.now() - compressionBegan) / 1000, compressedBefore / rate));
+            else if (changed) this.onProgress(this.summary(job));
+          } });
+          await active.compression.restore(job.samples);
+        }
+        return active.compression;
+      };
       const source = exportSource(request.document, request.from), targets = chapterTargets(request.document, request.from), offsets = exportOffsets(request.document);
       let index = 0, target = 0;
       // Rebuild text metadata only; completed audio is never synthesized again.
@@ -158,11 +175,11 @@ export class AudiobookJobs {
       const position = first ? offsets[first.parts[0].segment] + first.parts[0].start : Infinity;
       while (target < targets.length && offsets[targets[target].segment] + targets[target].character < position) target++;
       if (first && !active.cancelled) {
+        if (config.ffmpeg) { const encoding = await ensureEncoding(); encoding.update(job.samples); }
         job.status = 'loading'; job.message = 'Loading the local export voice…'; await this.save(job);
-        active.backend = await this.backend(request.engine);
+        active.backend = await this.backend(request.engine, { voice: request.voice });
         job.device = active.backend.details.device; job.provider = active.backend.details.provider; job.status = 'running'; job.message = 'Creating audio. Your place is saved after each phrase.'; await this.save(job);
       }
-      const check = () => { if (active.cancelled) throw new Error('Export paused.'); };
       for (let current = first; current; current = source.get(++index)) {
         check(); const next = source.get(index + 1), began = performance.now();
         const audio = await active.backend.generate(current.text, request.voice, check); check();
@@ -177,7 +194,7 @@ export class AudiobookJobs {
         // Commit metadata only after the PCM is durable. Resume truncates any uncommitted tail.
         if (title && job.chapters.at(-1)?.sample !== job.samples) job.chapters.push({ title, sample: job.samples });
         job.samples += pcm.length; job.next = index + 1; job.generationMs += performance.now() - began;
-        job.completedCharacters = Math.max(0, end - offsets[request.from]); job.progress = Math.min(99, job.completedCharacters / Math.max(1, job.totalCharacters) * 100); await this.save(job); source.release(index + 1);
+        job.completedCharacters = Math.max(0, end - offsets[request.from]); job.progress = Math.min(99, job.completedCharacters / Math.max(1, job.totalCharacters) * 100); await this.save(job); check(); active.compression?.update(job.samples); source.release(index + 1);
       }
       await file.close(); file = null; await active.backend?.close(); active.backend = null; check();
       if (!job.samples) throw new Error('This document has no spoken text after margin cleanup.');
@@ -185,21 +202,39 @@ export class AudiobookJobs {
       const metadata = path.join(directory, 'chapters.txt'), temporary = path.join(directory, 'finished.m4b');
       const { writeFile } = await import('node:fs/promises'); await writeFile(metadata, chapterMetadata(job));
       const began = performance.now();
-      await executable(config.ffmpeg, ['-hide_banner', '-loglevel', 'error', '-y', '-f', 's16le', '-ar', String(rate), '-ac', '1', '-i', pcmPath, '-f', 'ffmetadata', '-i', metadata, '-map', '0:a', '-map_metadata', '1', '-map_chapters', '1', '-c:a', 'aac', '-b:a', '96k', '-movflags', '+faststart', '-f', 'mp4', temporary], child => { active.encoder = child; }); active.encoder = null; check();
-      const probe = JSON.parse(await executable(config.ffprobe, ['-v', 'error', '-show_format', '-show_chapters', '-show_streams', '-of', 'json', temporary]));
-      if (!probe.streams.some(stream => stream.codec_name === 'aac') || Math.abs(Number(probe.format.duration) - job.samples / rate) > .25 || probe.chapters.length !== job.chapters.length) throw new Error('The finished audiobook did not pass the output check. Completed speech remains saved.');
+      const childStarted = child => { active.encoder = child; if (active.cancelled) child.kill(); };
+      const probeFile = async () => { try { return JSON.parse(await executable(config.ffprobe, ['-v', 'error', '-show_format', '-show_chapters', '-show_streams', '-of', 'json', temporary], childStarted)); } finally { active.encoder = null; } };
+      const valid = info => info.streams?.some(stream => stream.codec_name === 'aac' && Number(stream.sample_rate) === rate && stream.channels === 1) && Math.abs(Number(info.format?.duration) - job.samples / rate) <= .25 && info.chapters?.length === job.chapters.length && info.chapters.every((chapter, i) => chapter.tags?.title === job.chapters[i].title && Math.abs(Number(chapter.start_time) - job.chapters[i].sample / rate) <= .002);
+      finishing({ phase: 'checking' }); let ready = false;
+      // A pause after encoding must not discard a complete file while verification/publication is pending.
+      try { if ((await stat(temporary)).size > 0) { ready = valid(await probeFile()); if (ready && job.finishedHash) ready = await fileHash(temporary) === job.finishedHash; } } catch { /* An interrupted encoder can leave an incomplete private file. */ }
+      check();
+      if (!ready) {
+        const encoding = await ensureEncoding(); compressedBefore = encoding.completed; compressionBegan = performance.now();
+        finishing({ phase: 'encoding', encodedSeconds: compressedBefore / rate, totalSeconds: job.samples / rate, percent: Math.min(99.9, compressedBefore / job.samples * 100) });
+        await encoding.finish(job.samples); check();
+        const assemblyBegan = performance.now(); finishing({ phase: 'assembling', encodedSeconds: 0, totalSeconds: job.samples / rate, percent: 0 });
+        await encoding.assemble(metadata, temporary, ffmpegProgress(record => { const progress = encodingProgress(record, job.samples / rate, (performance.now() - assemblyBegan) / 1000); finishing({ ...progress, phase: progress.phase === 'indexing' ? 'indexing' : 'assembling' }); }));
+        check(); finishing({ phase: 'checking' });
+        if (!valid(await probeFile())) throw new Error('The finished audiobook did not pass the output check. Completed speech remains saved.');
+      }
+      check();
       const finished = await open(temporary, 'r+'); try { await finished.sync(); } finally { await finished.close(); }
       job.finishedHash = await fileHash(temporary); await this.save(job); check();
+      finishing({ phase: 'saving' }); check();
       await publishAudio(temporary, job.output, { id: job.id }); job.encodingMs = performance.now() - began; job.status = 'complete'; job.progress = 100; job.message = 'Audiobook saved.'; await this.save(job);
       await this.cleanup(id); return this.summary(job);
     } catch (error) {
       if (!job) throw error;
-      job.status = active.cancelled ? 'paused' : 'error'; job.message = active.cancelled ? 'Paused. Resume from the last saved phrase.' : error.message;
+      const wasFinishing = job.status === 'encoding';
+      await active.compression?.stop();
+      job.status = active.cancelled ? 'paused' : 'error'; job.message = active.cancelled ? wasFinishing ? 'Paused while finishing. Narration and completed compressed sections are saved; Resume continues the remaining work.' : 'Paused. Resume from the last saved phrase; completed compressed sections are kept.' : error.message;
       await this.save(job); return this.summary(job);
-    } finally { await file?.close(); await active.backend?.close(true); }
+    } finally { await active.compression?.stop(); await file?.close(); await active.backend?.close(true); }
   }
   async cleanup(id) {
-    for (const name of ['audio.pcm', 'source.json', 'finished.m4b', 'chapters.txt']) {
+    await cleanupEncoding(this.directory(id)).catch(() => {});
+    for (const name of ['audio.pcm', 'source.json', 'finished.m4b', 'chapters.txt', 'reference.wav', 'reference.mp3', 'reference.m4a', 'reference.flac', 'reference.ogg']) {
       try { await unlink(path.join(this.directory(id), name)); } catch { /* A complete job stays complete if Windows temporarily holds a file. */ }
     }
   }
@@ -211,7 +246,7 @@ export class AudiobookJobs {
       const source = exportSource(request.document, request.from); let text = '';
       for (let i = 0; i < 4; i++) { const part = source.get(i); if (!part || (text && text.length + part.text.length > 650)) break; text += (text ? '\n\n' : '') + part.text; }
       if (!text) throw new Error('Choose a passage with spoken text.');
-      const began = performance.now(); active.backend = await this.backend(request.engine); const loaded = performance.now();
+      const began = performance.now(); active.backend = await this.backend(request.engine, { voice: request.voice }); const loaded = performance.now();
       const audio = await active.backend.generate(text, request.voice, () => { if (active.cancelled) throw new Error('Comparison stopped.'); });
       return { bytes: wavBytes(audio.audio, audio.sampling_rate), loadMs: loaded - began, generationMs: performance.now() - loaded, audioSeconds: audio.audio.length / audio.sampling_rate, text, device: active.backend.details.device };
     })().finally(async () => { await active.backend?.close(true); if (this.active === active) this.active = null; });
